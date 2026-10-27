@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readConfig } from './src/config.mjs';
 import { BYOK_DNS_PORT, KimiWorkGateway, NativeByokDNS, NativeSetup, OpenAIBackend,
-  copySetupToken, defaultKimiDirectory, defaultStateDirectory, nativeFlagFile } from './src/index.mjs';
+  copySetupToken, defaultKimiDirectory, defaultStateDirectory, nativeFlagFile,
+  inspectKimiContract, summarizeKimiContract } from './src/index.mjs';
 
 const USAGE = [
   'usage: kimi-work-gateway <command> [options]',
@@ -15,6 +16,8 @@ const USAGE = [
   '      install the dev.msh.team resolver; may ask for administrator rights',
   '  remove-dns [--state-dir <dir>] [--kimi-dir <dir>] [--dns-port <port>]',
   '      remove the dev.msh.team resolver; may ask for administrator rights',
+  '  compat [--archive <file>]',
+  '      check the installed Kimi bundle against the catalog this gateway emits',
   '  status [--state-dir <dir>]',
   '      show the gateway status file and the native setup receipt',
   '  copy-token [--state-dir <dir>] [--token-env <name>]',
@@ -26,7 +29,9 @@ const USAGE = [
 // serve: 2 for bad config or missing env, 3 for a listener failure.
 // prepare/remove-dns map the setup state: 4 resolver-conflict, 5 cancelled,
 // 6 interrupted, 7 failed, 8 unsupported-platform.
+// compat: 0 verified or unverifiable, 9 incompatible (models would be dropped).
 const SETUP_EXIT = { done: 0, 'resolver-conflict': 4, cancelled: 5, interrupted: 6, failed: 7, 'unsupported-platform': 8 };
+const COMPAT_EXIT = { verified: 0, unverified: 0, unavailable: 0, incompatible: 9 };
 
 function streams(io) {
   return {
@@ -187,9 +192,18 @@ async function copyTokenCommand(argv, env, io, overrides) {
   return 0;
 }
 
+function compatCommand(argv, env, io, overrides) {
+  const flags = parseFlags(argv, ['archive']);
+  if (!flags) return usageError(io, 'kimi-work-gateway: invalid arguments for compat');
+  const result = (overrides.inspectKimiContract || inspectKimiContract)(flags.archive ? { archive: flags.archive } : {});
+  io.out(summarizeKimiContract(result));
+  return COMPAT_EXIT[result.state] ?? 0;
+}
+
 // run() returns the exit code instead of exiting; `overrides` swaps in a
-// NativeSetup-like factory or a copySetupToken so tests never reach the
-// administrator prompt, /etc or the clipboard.
+// NativeSetup-like factory, a copySetupToken or a contract inspector so tests
+// never reach the administrator prompt, /etc, the clipboard or the installed
+// Kimi bundle.
 export async function run(argv, env = process.env, io, overrides = {}) {
   const sink = streams(io);
   const [command, ...rest] = argv || [];
@@ -198,6 +212,7 @@ export async function run(argv, env = process.env, io, overrides = {}) {
     case 'serve': return serveCommand(rest, env, sink);
     case 'prepare': return nativeCommand('prepare', rest, env, sink, overrides);
     case 'remove-dns': return nativeCommand('remove-dns', rest, env, sink, overrides);
+    case 'compat': return compatCommand(rest, env, sink, overrides);
     case 'status': return statusCommand(rest, env, sink);
     case 'copy-token': return copyTokenCommand(rest, env, sink, overrides);
     default: return usageError(sink, 'kimi-work-gateway: unknown command ' + command);
