@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-27T20:05:00.000Z",
+  "title": "Design System: Kimi Work 网关控制面板",
+  "extensions": {
+    "colorMeta": {
+      "ground-dark": { "role": "neutral", "displayName": "Continuum Ground", "canonical": "oklch(14% 0.004 250)", "tonalRamp": ["#0b0c0d", "#141516", "#1c1d1f", "#262729", "#333436", "#4b4c4e", "#6e6f71", "#9a9b9c"] },
+      "plate-dark": { "role": "neutral", "displayName": "Plate", "canonical": "oklch(17.5% 0.004 250)", "tonalRamp": ["#111213", "#191a1c", "#222325", "#2c2d2f", "#393a3c", "#515254", "#737476", "#9d9e9f"] },
+      "plate-raised-dark": { "role": "neutral", "displayName": "Raised Plate", "canonical": "oklch(21% 0.004 250)", "tonalRamp": ["#17181a", "#1f2022", "#28292b", "#323335", "#3f4042", "#56575a", "#787a7c", "#a2a3a5"] },
+      "plate-sunk-dark": { "role": "neutral", "displayName": "Sunk Plate", "canonical": "oklch(15% 0.004 250)", "tonalRamp": ["#0d0e0f", "#151617", "#1e1f20", "#28292a", "#353637", "#4c4d4f", "#6f7072", "#9b9c9d"] },
+      "rule-dark": { "role": "neutral", "displayName": "Hairline Rule", "canonical": "oklch(33% 0.003 250)", "tonalRamp": ["#2a2c2e", "#323436", "#3b3d3f", "#454749", "#525456", "#696b6d", "#8a8c8e", "#b0b2b3"] },
+      "rule-strong-dark": { "role": "neutral", "displayName": "Interactive Rule", "canonical": "oklch(44% 0.004 250)", "tonalRamp": ["#45484b", "#4d5053", "#56595c", "#606366", "#6d7073", "#84878a", "#a5a8aa", "#c8cbcd"] },
+      "bone-dark": { "role": "primary", "displayName": "Bone Ink", "canonical": "oklch(92% 0.012 85)", "tonalRamp": ["#3a3833", "#4e4c45", "#646159", "#7c7970", "#959188", "#aea99f", "#c9c4b9", "#eae6dd"] },
+      "bone-2-dark": { "role": "neutral", "displayName": "Secondary Ink", "canonical": "oklch(74% 0.012 85)", "tonalRamp": ["#2f2d29", "#403e3a", "#545149", "#6a665f", "#807c74", "#96928a", "#a5a199", "#b3aea4"] },
+      "bone-3-dark": { "role": "neutral", "displayName": "Label Ink", "canonical": "oklch(59% 0.011 85)", "tonalRamp": ["#282622", "#37352f", "#47443d", "#585550", "#6a675f", "#7b786f", "#838077", "#8b877f"] },
+      "bone-dim-dark": { "role": "neutral", "displayName": "Quiet Ink", "canonical": "oklch(55% 0.010 85)", "tonalRamp": ["#252320", "#33312c", "#42403a", "#514e48", "#605d56", "#6f6c64", "#787570", "#807c74"] },
+      "bone-off-dark": { "role": "neutral", "displayName": "Disabled Ink", "canonical": "oklch(47% 0.009 85)", "tonalRamp": ["#1f1e1b", "#2b2925", "#383631", "#45433d", "#525049", "#5f5c55", "#68645e", "#6c6862"] },
+      "sodium": { "role": "primary", "displayName": "Sodium Target", "canonical": "oklch(82% 0.13 85)", "tonalRamp": ["#3d3210", "#5c4a14", "#7a6219", "#9b7c20", "#bb962b", "#d3ae3e", "#e4bf49", "#f0c352"] },
+      "alert-dark": { "role": "secondary", "displayName": "Alert Emission", "canonical": "oklch(68% 0.15 25)", "tonalRamp": ["#3a1a18", "#52241f", "#6b2f28", "#853b32", "#9d4a3f", "#b75c50", "#d2695f", "#e8736b"] },
+      "ground-light": { "role": "neutral", "displayName": "Ash Ground", "canonical": "oklch(89% 0.003 160)", "tonalRamp": ["#4a4c4b", "#666967", "#848786", "#a3a6a4", "#bec1bf", "#d0d2d1", "#d8dad9", "#dfe1e0"] },
+      "plate-light": { "role": "neutral", "displayName": "Ash Plate", "canonical": "oklch(93% 0.003 160)", "tonalRamp": ["#535554", "#6e7170", "#8b8e8c", "#a9acaa", "#c3c6c4", "#d7d9d8", "#e3e5e3", "#eceeec"] },
+      "bone-light": { "role": "primary", "displayName": "Charcoal Ink", "canonical": "oklch(18% 0.005 160)", "tonalRamp": ["#141615", "#1d1f1e", "#272927", "#323432", "#3f413f", "#565856", "#797b79", "#9fa19f"] },
+      "sodium-light": { "role": "primary", "displayName": "Sodium Ink", "canonical": "oklch(44% 0.10 80)", "tonalRamp": ["#2b1f04", "#3f2d05", "#553c06", "#6a4c07", "#7b5605", "#96701a", "#ab8a3c", "#c2a866"] },
+      "alert-light": { "role": "secondary", "displayName": "Alert Ink", "canonical": "oklch(44% 0.14 25)", "tonalRamp": ["#2e0d0a", "#451410", "#5c1c17", "#74241e", "#8a2a23", "#9d2f27", "#b3544d", "#c9837d"] },
+      "emission-405": { "role": "tertiary", "displayName": "405 Violet", "canonical": "oklch(70% 0.15 295)", "tonalRamp": ["#2b2444", "#3d335e", "#4f4278", "#615393", "#7367a8", "#8479b7", "#9082c4", "#9a8bf2"] },
+      "emission-436": { "role": "tertiary", "displayName": "436 Indigo", "canonical": "oklch(66% 0.16 265)", "tonalRamp": ["#202c46", "#2d3d5e", "#3b4f78", "#496293", "#5775a8", "#6384b7", "#6a89c4", "#6e8ef6"] },
+      "emission-486": { "role": "tertiary", "displayName": "486 Cyan", "canonical": "oklch(78% 0.11 215)", "tonalRamp": ["#12383f", "#194d56", "#21636e", "#297a87", "#3390a0", "#3ea5b6", "#47b8c9", "#4fc9e0"] },
+      "emission-546": { "role": "tertiary", "displayName": "546 Green", "canonical": "oklch(79% 0.13 150)", "tonalRamp": ["#173a26", "#1f5033", "#286641", "#327d4f", "#3d945e", "#4ca96c", "#5dbd7c", "#6fd08a"] },
+      "emission-589": { "role": "tertiary", "displayName": "589 Sodium", "canonical": "oklch(82% 0.13 85)", "tonalRamp": ["#3d3210", "#5c4a14", "#7a6219", "#9b7c20", "#bb962b", "#d3ae3e", "#e4bf49", "#f0c352"] },
+      "emission-615": { "role": "tertiary", "displayName": "615 Orange", "canonical": "oklch(74% 0.14 55)", "tonalRamp": ["#38220f", "#4e3016", "#663e1d", "#7e4c24", "#955a2b", "#ab6833", "#c07840", "#ef8a4c"] },
+      "emission-656": { "role": "tertiary", "displayName": "656 Deep Red", "canonical": "oklch(63% 0.16 25)", "tonalRamp": ["#331513", "#481d1a", "#5f2622", "#762f2a", "#8c3932", "#a1433b", "#b84c44", "#e0605a"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Plate Title", "purpose": "The single page title. Never used for section headings." },
+      "heading": { "displayName": "Plate Heading", "purpose": "Section and column titles." },
+      "body": { "displayName": "Body", "purpose": "Ledes and explanatory copy, 58–62ch measure." },
+      "label": { "displayName": "Label", "purpose": "Control text, hints, values in ruled rows." },
+      "micro": { "displayName": "Micro Label", "purpose": "Uppercase section labels and readout captions at the 11px floor." },
+      "mono": { "displayName": "Measurement", "purpose": "Identifiers, URLs, token counts, timestamps. Never prose." }
+    },
+    "shadows": [
+      { "name": "toast-lift", "value": "0 10px 26px rgba(0,0,0,0.42), 0 2px 6px rgba(0,0,0,0.30)", "purpose": "The only floating element in the panel: a transient status toast." },
+      { "name": "toast-alert-ring", "value": "0 0 0 1px #e8736b, 0 10px 26px rgba(0,0,0,0.42)", "purpose": "Error toast: a ring stands in for a border so elevation stays single-layer." },
+      { "name": "tick-doubled", "value": "2px 0 0 0 #f0c352", "purpose": "Doubles the 3px emission tick of the selected model row without adding width." },
+      { "name": "primary-doubled-rule", "value": "inset 0 0 0 3px #111213, inset 0 0 0 4px #7a6428", "purpose": "The primary button's doubled hairline, cut from the plate colour." }
+    ],
+    "motion": [
+      { "name": "ease-state", "value": "cubic-bezier(0.2, 0.7, 0.2, 1)", "purpose": "Hover, focus, and colour transitions at 140ms." },
+      { "name": "ease-out-soft", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Layout shifts and the calibration band's mark travel at 480–520ms." },
+      { "name": "skeleton-sweep", "value": "linear 1500ms infinite", "purpose": "The loading skeleton's single sweep. No spinner." },
+      { "name": "press-nudge", "value": "translateY(1px) at 140ms", "purpose": "Buttons press down by one pixel; nothing scales." }
+    ],
+    "breakpoints": [
+      { "name": "wide", "value": "1180px" },
+      { "name": "rail-collapse", "value": "900px" },
+      { "name": "registers-stack", "value": "780px" },
+      { "name": "phone", "value": "640px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one committing action on the plate: apply the drafted target. Doubled hairline, arrow on the trailing edge.",
+      "html": "<button class=\"ds-btn-primary\"><span>应用目标</span><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.25\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M2 8h11\"/><path d=\"M9 4l4 4-4 4\"/></svg></button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 7px 11px 7px 15px; border: 1px solid #f0c352; border-radius: 0; background: transparent; color: #eae6dd; font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; letter-spacing: 0.02em; cursor: pointer; box-shadow: inset 0 0 0 3px #111213, inset 0 0 0 4px #7a6428; transition: background 140ms cubic-bezier(0.2,0.7,0.2,1), border-color 140ms cubic-bezier(0.2,0.7,0.2,1); } .ds-btn-primary svg { color: #f0c352; flex: none; } .ds-btn-primary:hover { background: rgba(240,195,82,0.22); } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: 2px solid #f0c352; outline-offset: 2px; } .ds-btn-primary:disabled { color: #6c6862; border-color: #2a2c2e; box-shadow: inset 0 0 0 3px #111213, inset 0 0 0 4px #1f2123; cursor: not-allowed; } .ds-btn-primary:disabled svg { color: #6c6862; }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Secondary actions that change state (restore inherit, prepare runtime, launch Kimi).",
+      "html": "<button class=\"ds-btn-outline\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.25\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M2.5 5.5h11v8h-11z\"/><path d=\"M2.5 5.5 5 3h6l2.5 2.5\"/><path d=\"M8 5.5v8\"/></svg><span>准备副本</span></button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 7px 15px; border: 1px solid #45484b; border-radius: 0; background: transparent; color: #eae6dd; font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; letter-spacing: 0.02em; cursor: pointer; transition: background 140ms cubic-bezier(0.2,0.7,0.2,1), border-color 140ms cubic-bezier(0.2,0.7,0.2,1); } .ds-btn-outline svg { flex: none; } .ds-btn-outline:hover { border-color: #8b877f; background: #17181a; } .ds-btn-outline:active { transform: translateY(1px); } .ds-btn-outline:focus-visible { outline: 2px solid #f0c352; outline-offset: 2px; } .ds-btn-outline:disabled { color: #6c6862; border-color: #1f2123; cursor: not-allowed; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Non-committing actions: discard the draft, copy the token.",
+      "html": "<button class=\"ds-btn-quiet\">放弃修改</button>",
+      "css": ".ds-btn-quiet { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; padding: 7px 6px; border: 1px solid transparent; border-radius: 0; background: transparent; color: #8b877f; font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: color 140ms cubic-bezier(0.2,0.7,0.2,1); } .ds-btn-quiet:hover { color: #eae6dd; text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; } .ds-btn-quiet:focus-visible { outline: 2px solid #f0c352; outline-offset: 2px; } .ds-btn-quiet:disabled { color: #6c6862; cursor: not-allowed; }"
+    },
+    {
+      "name": "Binding Registers",
+      "kind": "custom",
+      "description": "The signature component. Saved target and adopted runtime as two registers on one rule, with the verdict between them carrying the state mark.",
+      "html": "<div class=\"ds-registers\"><div class=\"ds-register\"><p class=\"ds-micro\">已保存</p><p class=\"ds-register-value\">kimi-k3.1-pro</p><p class=\"ds-register-sub\">kimi-k3.1-pro · 档位自动</p></div><div class=\"ds-verdict\"><svg class=\"ds-verdict-mark\" width=\"22\" height=\"22\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" aria-hidden=\"true\"><path d=\"M8 1.5v13\"/></svg><p class=\"ds-verdict-word\">待启动</p><p class=\"ds-verdict-note\">副本已准备，等待 Kimi 用该副本启动。</p></div><div class=\"ds-register ds-register-right\"><p class=\"ds-micro\">实际采用</p><p class=\"ds-register-value\">尚未加载</p><p class=\"ds-register-sub\">策略已写入：kimi-k3.1-pro</p></div></div>",
+      "css": ".ds-registers { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.15fr) minmax(0,1fr); border-top: 1px solid #1f2123; border-bottom: 1px solid #1f2123; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-register { display: grid; gap: 5px; align-content: start; padding: 14px 0 15px; } .ds-register-right { text-align: right; justify-items: end; } .ds-micro { margin: 0; font-size: 11px; line-height: 1.4; letter-spacing: 0.14em; color: #8b877f; text-transform: uppercase; } .ds-register-value { margin: 0; font: 400 20px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: -0.02em; color: #eae6dd; word-break: normal; overflow-wrap: anywhere; } .ds-register-right .ds-register-value { color: #b3aea4; } .ds-register-sub { margin: 0; font-size: 12px; line-height: 1.5; color: #8b877f; } .ds-verdict { display: grid; justify-items: center; align-content: center; gap: 3px; padding: 12px 20px; background: #0d0e0f; border-left: 1px solid #1f2123; border-right: 1px solid #1f2123; text-align: center; color: #8b877f; } .ds-verdict-mark { margin-bottom: 3px; } .ds-verdict-word { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; color: inherit; } .ds-verdict-note { margin: 0; font-size: 11px; line-height: 1.45; color: #8b877f; max-width: 30ch; }"
+    },
+    {
+      "name": "Model Row",
+      "kind": "custom",
+      "refersTo": "model-row",
+      "description": "One catalogue entry: emission tick, mono id, capability flags in tabular columns. Selected recesses and the tick doubles in sodium.",
+      "html": "<label class=\"ds-model\"><span class=\"ds-model-tick\"></span><span class=\"ds-model-main\"><span class=\"ds-model-id\">kimi-k3.1-pro</span><span class=\"ds-model-name\">档位自动 · out 32.8K</span></span><span class=\"ds-model-cell\">262.1K ctx</span><span class=\"ds-model-cell\">chat</span><span class=\"ds-model-flags\"><span class=\"ds-flag\">已保存</span><span class=\"ds-flag\">工具</span><span class=\"ds-flag\">推理</span></span></label>",
+      "css": ".ds-model { position: relative; display: grid; grid-template-columns: 16px minmax(0,1fr) 64px 74px 156px; align-items: center; gap: 12px; padding: 9px 10px 9px 8px; border-bottom: 1px solid #1f2123; background: #0d0e0f; cursor: pointer; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; transition: background 140ms cubic-bezier(0.2,0.7,0.2,1); } .ds-model:hover { background: #17181a; } .ds-model-tick { width: 3px; height: 22px; background: #f0c352; box-shadow: 2px 0 0 0 #f0c352; } .ds-model-main { display: grid; gap: 1px; min-width: 0; } .ds-model-id { font: 400 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #eae6dd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-model-name { font-size: 11px; color: #8b877f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .ds-model-cell { font: 400 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #b3aea4; text-align: right; white-space: nowrap; } .ds-model-flags { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: nowrap; } .ds-flag { font-size: 11px; line-height: 1.5; letter-spacing: 0.04em; padding: 1px 4px; border: 1px solid #45484b; color: #b3aea4; white-space: nowrap; }"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "search-input",
+      "description": "Catalogue filter. The field is its own focus ring; the caret is sodium.",
+      "html": "<div class=\"ds-search\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.25\" stroke-linecap=\"round\" aria-hidden=\"true\"><circle cx=\"6.9\" cy=\"6.9\" r=\"4.4\"/><path d=\"M10.2 10.2 14 14\"/></svg><input class=\"ds-search-input\" type=\"search\" placeholder=\"搜索模型 ID 或名称\" aria-label=\"搜索模型\"></div>",
+      "css": ".ds-search { position: relative; display: flex; align-items: center; } .ds-search svg { position: absolute; left: 9px; color: #8b877f; pointer-events: none; } .ds-search-input { width: 100%; height: 32px; padding: 0 30px 0 31px; border: 1px solid #2a2c2e; border-radius: 0; background: #0d0e0f; color: #eae6dd; caret-color: #f0c352; font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; transition: border-color 140ms cubic-bezier(0.2,0.7,0.2,1); } .ds-search-input::placeholder { color: #807c74; opacity: 1; } .ds-search-input:hover { border-color: #45484b; } .ds-search-input:focus { outline: none; border-color: #f0c352; }"
+    },
+    {
+      "name": "Effort Option",
+      "kind": "chip",
+      "refersTo": "effort-option",
+      "description": "Reasoning-effort choice. A leading 1px mark doubles when checked; 'auto' keeps a dashed mark.",
+      "html": "<label class=\"ds-effort\"><span class=\"ds-effort-on\">自动 · 默认 medium</span></label><label class=\"ds-effort\"><span class=\"ds-effort-off\">high</span></label>",
+      "css": ".ds-effort { display: inline-flex; } .ds-effort-on, .ds-effort-off { display: inline-flex; align-items: center; gap: 7px; min-height: 28px; padding: 4px 11px; border: 1px solid #2a2c2e; border-radius: 0; color: #b3aea4; font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: border-color 140ms cubic-bezier(0.2,0.7,0.2,1), color 140ms cubic-bezier(0.2,0.7,0.2,1), background 140ms cubic-bezier(0.2,0.7,0.2,1); } .ds-effort-on::before, .ds-effort-off::before { content: ''; width: 1px; height: 10px; background: #45484b; flex: none; } .ds-effort-on { border-color: #f0c352; color: #eae6dd; background: rgba(240,195,82,0.22); } .ds-effort-on::before { background: #f0c352; box-shadow: 2px 0 0 -0.4px #f0c352; } .ds-effort-off:hover { border-color: #45484b; color: #eae6dd; }"
+    },
+    {
+      "name": "State Mark",
+      "kind": "custom",
+      "description": "The seven line forms that carry state. Solid = live, dashed = pending, half = stale, struck = blocked, doubled = saved, capped = adopted, conflicting = disagreement.",
+      "html": "<div class=\"ds-marks\"><span class=\"ds-mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"butt\" aria-hidden=\"true\"><path d=\"M8 1.5v13\" stroke-width=\"1.6\"/></svg>live</span><span class=\"ds-mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"butt\" aria-hidden=\"true\"><path d=\"M8 1.5v13\" stroke-width=\"1.6\" stroke-dasharray=\"3 2.4\"/></svg>pending</span><span class=\"ds-mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"butt\" aria-hidden=\"true\"><path d=\"M8 7.5v7\" stroke-width=\"1.6\"/><path d=\"M8 1.5v3.4\" stroke-width=\"1.6\" opacity=\"0.28\"/></svg>stale</span><span class=\"ds-mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"butt\" aria-hidden=\"true\"><path d=\"M8 1.5v13\" stroke-width=\"1.2\" opacity=\"0.5\"/><path d=\"M3.2 12.4 12.8 3.6\" stroke-width=\"1.3\"/></svg>blocked</span><span class=\"ds-mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"butt\" aria-hidden=\"true\"><path d=\"M6.5 1.5v13\" stroke-width=\"1.3\"/><path d=\"M9.5 1.5v13\" stroke-width=\"1.3\"/></svg>saved</span><span class=\"ds-mark\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"butt\" aria-hidden=\"true\"><path d=\"M8 3.2v11.3\" stroke-width=\"1.6\"/><path d=\"M3.8 2.2h8.4\" stroke-width=\"1.4\"/></svg>adopted</span></div>",
+      "css": ".ds-marks { display: flex; gap: 18px; flex-wrap: wrap; font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #8b877f; } .ds-mark { display: inline-flex; align-items: center; gap: 7px; } .ds-mark svg { color: #eae6dd; flex: none; } .ds-mark:nth-child(2) svg { color: #8b877f; } .ds-mark:nth-child(4) svg { color: #e8736b; } .ds-mark:nth-child(5) svg { color: #f0c352; } .ds-mark:nth-child(6) svg { color: #f0c352; }"
+    },
+    {
+      "name": "Section Rail",
+      "kind": "nav",
+      "description": "The off-centre rail's navigation. A landing tick marks the current section; it lengthens and turns sodium.",
+      "html": "<nav class=\"ds-rail-nav\"><a class=\"ds-rail-link ds-rail-link-current\" href=\"#binding\"><span class=\"ds-rail-tick\"></span>绑定</a><a class=\"ds-rail-link\" href=\"#target\"><span class=\"ds-rail-tick\"></span>目标</a><a class=\"ds-rail-link\" href=\"#runtime\"><span class=\"ds-rail-tick\"></span>运行时</a></nav>",
+      "css": ".ds-rail-nav { display: flex; flex-direction: column; border-top: 1px solid #1f2123; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-rail-link { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #1f2123; color: #8b877f; font-size: 12px; text-decoration: none; transition: color 140ms cubic-bezier(0.2,0.7,0.2,1); } .ds-rail-link:hover { color: #eae6dd; } .ds-rail-tick { width: 14px; height: 1px; background: #45484b; transition: background 140ms cubic-bezier(0.2,0.7,0.2,1), width 200ms cubic-bezier(0.16,1,0.3,1); } .ds-rail-link-current { color: #eae6dd; } .ds-rail-link-current .ds-rail-tick { width: 22px; background: #f0c352; } .ds-rail-link:focus-visible { outline: 2px solid #f0c352; outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Working Plate",
+    "overview": "The panel is one instrument plate calibrated against a single off-centre rail. It is not a settings dashboard. There is one continuum, one rail, one binding strip, and the whole surface is read the way you read a spectrograph: by line form, not by colour. The product's one hard truth is that a saved choice and an adopted runtime are different facts. Most control panels blur them into a single \"current setting\" row. Here they sit as two registers on the same horizontal rule, with a verdict between them, so the difference is structural rather than explained.",
+    "keyCharacteristics": [
+      "Colour survives only as seven hairline emission lines (405/436/486/546/589/615/656 nm) used for measurement, never decoration.",
+      "State is carried by line height, dash, doubling, capping, and strike-through — not hue.",
+      "Structure is drawn, not boxed: 1px hairlines, corner registration ticks, ruled groups.",
+      "One grotesque at one size, ranked by tracking and ink; monospace only for identifiers, URLs, numbers, and timestamps.",
+      "Square corners everywhere. No radii, no pills, no cards."
+    ],
+    "rules": [
+      { "name": "The Emission-Only Rule", "body": "Colour may not encode state. If a mark needs to say \"pending\", \"adopted\", \"blocked\", or \"conflicting\", it says it in line form. Hue is reserved for identity (which model) and for the single accent (which target).", "section": "colors" },
+      { "name": "The Two-Register Rule", "body": "A saved value and an observed value never share one cell. If they must appear near each other, they are separated by a rule and a verdict word.", "section": "colors" },
+      { "name": "The 11px Floor", "body": "Functional text never goes below 11px; only non-interactive legal smallprint may. The band tags and readout captions sit exactly on the floor.", "section": "typography" },
+      { "name": "The Tracking-Not-Size Rule", "body": "Rank within the micro tier comes from tracking (0.14em) and ink, not from shrinking the type.", "section": "typography" },
+      { "name": "The Drawn-Not-Boxed Rule", "body": "If a boundary is needed, it is a hairline. Never a border plus a shadow on the same element.", "section": "elevation" }
+    ],
+    "dos": [
+      "Carry every state in line form first; add the word second.",
+      "Keep the saved register and the adopted register physically separate, always.",
+      "Use mono only for identifiers, URLs, numbers, and timestamps.",
+      "Keep the calibration band honest: every mark must correspond to a real catalogue value.",
+      "Let the rail carry system facts; let the plate carry the task."
+    ],
+    "donts": [
+      "Don't tint a state green/amber/red. Hue is for identity and the one accent.",
+      "Don't show the policy as if it were the runtime's observation.",
+      "Don't add a card, a pill, a radius, or a drop shadow to create hierarchy.",
+      "Don't decorate with stripes, grids, or grain; a texture must come from a measuring tool that is actually present.",
+      "Don't render the panel key, any credential, or raw configuration anywhere in the DOM."
+    ]
+  }
+}
