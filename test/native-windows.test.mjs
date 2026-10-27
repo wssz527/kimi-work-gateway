@@ -2,8 +2,8 @@ import { test, expect } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { NativeSetup, resolverScript, hostsScript, updateHosts, hostsEntry, HOSTS_MARKER, DEFAULT_HOSTS }
-  from '../src/native-setup.mjs';
+import { NativeSetup, resolverScript, hostsScript, updateHosts, hostsEntry, HOSTS_MARKER, DEFAULT_HOSTS,
+  verdictFailure } from '../src/native-setup.mjs';
 import { resolverConfiguration } from '../src/native-dns.mjs';
 
 function fixture(platform, admin, extra = {}) {
@@ -24,7 +24,9 @@ test('windows setup runs the hosts script and reveals the same flag', async () =
   try {
     const result = await f.setup.run(f.request('prepare'));
     expect(result).toEqual({ action: 'prepare', state: 'done' });
-    expect(script).toContain(f.hostsPath);
+    // The path is embedded as a JSON string literal, so its backslashes are
+    // escaped in the script text.
+    expect(script).toContain(JSON.stringify(f.hostsPath));
     expect(script).toContain(HOSTS_MARKER);
     expect(script).toContain(hostsEntry());
     expect(script).toContain('ipconfig /flushdns');
@@ -110,6 +112,45 @@ test('a cancelled UAC prompt maps to cancelled without retrying', async () => {
   try {
     expect((await f.setup.run(f.request('prepare'))).state).toBe('cancelled');
     expect(calls).toBe(1);
+  } finally { f.cleanup(); }
+});
+
+test('the windows script writes its verdict to a file the caller reads back', () => {
+  // `Start-Process -Verb RunAs` returns neither the exit code nor the stderr of
+  // the elevated child, so the verdict has to travel through a file. Both the
+  // conflict path and the success path must record it.
+  const report = 'C:\\Temp\\report';
+  const prepare = hostsScript('prepare', DEFAULT_HOSTS, true, report);
+  expect(prepare).toContain('Set-Content -LiteralPath ' + JSON.stringify(report));
+  expect(prepare).toContain('-Value "done"');
+  expect(prepare).toContain('-Value "resolver_conflict"');
+  // A script generated without a report path stays valid on its own.
+  const bare = hostsScript('prepare', DEFAULT_HOSTS);
+  expect(bare).not.toContain('Set-Content -LiteralPath "C:\\\\Temp\\\\report"');
+  expect(bare).toContain('resolver_conflict');
+});
+
+test('the elevated report decides the outcome, and a missing one is not a failure', () => {
+  // `Start-Process -Verb RunAs` gives the parent neither the exit code nor the
+  // stderr of the child, so the verdict travels through a file. Only an
+  // explicit verdict becomes an error.
+  expect(verdictFailure('resolver_conflict').stderr).toBe('resolver_conflict');
+  expect(verdictFailure('anything_else').stderr).toBe('anything_else');
+  // A cancelled prompt leaves no report at all, so it must not look like one.
+  expect(verdictFailure('')).toBe(null);
+  expect(verdictFailure('done')).toBe(null);
+});
+
+test('a conflict reported by the elevated child reaches the setup state', async () => {
+  // Mirrors the real path: the child exits normally, and the conflict is only
+  // visible in the report file the parent reads afterwards.
+  const f = fixture('win32', async (_script, report) => {
+    fs.writeFileSync(report, 'resolver_conflict');
+    throw verdictFailure('resolver_conflict');
+  });
+  try {
+    expect((await f.setup.run(f.request('prepare'))).state).toBe('resolver-conflict');
+    expect(fs.existsSync(f.flagFile)).toBe(false);
   } finally { f.cleanup(); }
 });
 

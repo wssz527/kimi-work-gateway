@@ -193,9 +193,18 @@ test('serve proxies catalog and inference, writes status, exits 0 on SIGTERM', a
     expect(raw).not.toContain(TOKEN);
     expect(runner.stderr).toBe('');
 
-    runner.child.kill('SIGTERM');
-    expect(await exited(runner)).toBe(0);
-    expect(existsSync(statusFile)).toBe(false);
+    // Windows has no signal delivery to a child: `kill` there terminates the
+    // process outright, so the graceful shutdown path (exit 0, status file
+    // removed) can only be observed on POSIX. A real console Ctrl+C does reach
+    // the handler on Windows, which is what the product relies on.
+    if (process.platform === 'win32') {
+      runner.child.kill();
+      await exited(runner).catch(() => {});
+    } else {
+      runner.child.kill('SIGTERM');
+      expect(await exited(runner)).toBe(0);
+      expect(existsSync(statusFile)).toBe(false);
+    }
   } finally {
     await stop(runner);
     await closeUpstream(server);
@@ -211,7 +220,7 @@ test('serve reads the config from stdin with --config -', async () => {
     runner = spawnCLI(['serve', '--config', '-', '--state-dir', stateDir], { [KEY_ENV]: KEY, [TOKEN_ENV]: TOKEN });
     runner.child.stdin.write(JSON.stringify(testConfig('http://127.0.0.1:' + server.address().port + '/v1')));
     runner.child.stdin.end();
-    const stdout = await waitForStdout(runner, /http:\/\/127\.0\.0\.1:\d+\/v1\n/);
+    const stdout = await waitForStdout(runner, /http:\/\/127\.0\.0\.1:\d+\/v1\ndns disabled\n/);
     expect(stdout).toContain('dns disabled');
   } finally {
     await stop(runner);
