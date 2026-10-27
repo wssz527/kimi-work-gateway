@@ -4,6 +4,8 @@
 
 它依赖 Kimi 自带的**第三方模型网关**设置，不修改 Kimi 安装包、`app.asar`、可执行文件或签名，不开调试端口，不注入模型菜单。
 
+独立网关只有命令行界面，**没有 web 面板**：全部配置来自配置文件与命令行参数。
+
 **支持 macOS 与 Windows。** Linux 未适配。
 
 ## 它解决什么问题
@@ -35,7 +37,8 @@ cd kimi-work-gateway
     { "id": "glm-5-3-flash", "name": "GLM 5.3 Flash", "protocol": "responses",
       "contextWindow": 131072, "maxOutputTokens": 32768, "tools": true },
     { "id": "deepseek-v4-1-flash", "protocol": "responses", "contextWindow": 131072, "tools": true },
-    { "id": "kimi-k3.1-pro", "protocol": "chat", "contextWindow": 262144, "tools": true, "reasoning": true }
+    { "id": "kimi-k3.1-pro", "protocol": "chat", "contextWindow": 262144, "tools": true,
+      "reasoning": true, "reasoningEfforts": ["low", "high"] }
   ]
 }
 ```
@@ -92,10 +95,69 @@ Windows 不需要 DNS 服务，因为 Kimi 用 `dns.promises.lookup` 解析该�
 | `prepare` | 安装单域名解析（macOS resolver / Windows hosts），显示隐藏入口；需管理员授权 |
 | `remove-dns` | 撤销上一项；只删除内容与本工具一致的文件或行 |
 | `compat --config <file>` | 用已安装 Kimi 检查指定模型配置；省略配置只检查内置样例 |
-| `status` | 打印网关状态文件与准备回执 |
+| `status` | 打印网关状态文件、准备回执与子代理策略/运行时状态 |
 | `copy-token` | 把本地网关 Token 复制到剪贴板 |
+| `subagents-prepare` | 为子代理控制适配本地运行时副本（见下节）；不改安装目录 |
+| `subagents-status` | 只读报告子代理策略与运行时状态 |
+| `subagents-launch` | 用适配后的运行时副本启动 Kimi；需先退出 Kimi |
 
-`serve` 不会申请管理员权限，也不会改 Kimi 自己的配置。状态文件包含进程与实例标识、URL、模型数量和 DNS 模式，不含 Key 或对话内容；退出时只清理仍归本实例所有的状态。
+`serve` 不会申请管理员权限，也不会改 Kimi 自己的配置。状态文件包含进程与实例标识、URL、模型数量、DNS 模式与生效的子代理策略，不含 Key 或对话内容；退出时只清理仍归本实例所有的状态。
+
+## 子代理控制（可选，非官方适配）
+
+默认情况下 Work 里的子代理沿用主模型。如果希望子代理固定走另一个模型，本工具提供一条**内部、非官方**的适配路径：
+
+- Kimi 从**本地运行时副本**加载适配代码：`subagents-launch` 为本次 Kimi 进程设置 `DAIMON_BUNDLE_DIR`，指向状态目录里的副本。`serve` 负责保存策略和转发请求，**不修改 Kimi 安装目录、`app.asar`、可执行文件或签名**。
+- 只支持 **Kimi 3.2.21** 且内核源码哈希精确匹配的那一份；版本或哈希不符时 `subagents-prepare` 直接拒绝（退出码 9），不会尝试猜测。
+- 主模型仍由 Work 菜单选择；这里只影响子代理。
+
+配置里加一段 `subagents`（模型必须已在本工具的 `models` 中声明且带 `tools`；要写 `effort` 时该模型还须声明 `reasoningEfforts`）：
+
+```json
+{
+  "subagents": { "mode": "force", "model": "kimi-k3.1-pro", "effort": "high" }
+}
+```
+
+对应 `models` 里至少要这样声明：
+
+```json
+{ "id": "kimi-k3.1-pro", "protocol": "chat", "contextWindow": 262144, "tools": true,
+  "reasoning": true, "reasoningEfforts": ["low", "high"] }
+```
+
+省略 `subagents` 或写 `{ "mode": "inherit" }` 表示使用 Kimi 原来的子代理绑定。指向未声明、不支持工具或 `effort` 不在 `reasoningEfforts` 内的模型时，配置会直接被拒绝，`serve` 在监听前退出（退出码 2）。推理档位需使用小写标识符，最长 32 字符。更改配置后重启 `serve --config gateway.json`，保持网关运行，再进行下面的准备和启动。
+
+```sh
+# 1. 适配本地运行时副本（幂等，不改安装目录）
+node bin/kimi-work-gateway.mjs subagents-prepare
+
+# 2. 查看策略与运行时状态（只读，不写文件）
+node bin/kimi-work-gateway.mjs subagents-status
+
+# 3. 完全退出 Kimi 后，用适配副本启动
+node bin/kimi-work-gateway.mjs subagents-launch
+```
+
+`subagents-launch` 要求 Kimi 已退出：若检测到 Kimi 仍在运行，会返回 `waiting-kimi-exit`（退出码 0），此时请先退出 Kimi 再重试。
+
+`force` 生效时的行为：
+
+| 情况 | 结果 |
+| --- | --- |
+| 新建普通子代理 | 使用 `force` 指定的模型（含 `effort`） |
+| `fork` 现有子代理 | 拒绝：fork 继承父模型，与 `force` 冲突 |
+| `resume` 之前用别的模型跑过的子代理 | 拒绝：需要新建子代理 |
+
+**停止控制并恢复继承**：结束 `serve`（Ctrl+C）时，网关会把自己写入的策略恢复为 `inherit`；也可以在配置里删除 `subagents` 段并重启 `serve`。下次从 Kimi 的通常应用入口启动即可不使用适配副本。
+
+注意事项：
+
+- 这是**内部、非官方适配**，依赖 Work 内核的具体实现；Kimi 新版本会被直接拒绝。当前允许的规范化内核 SHA-256 为 `ea0a2ec58a26bd0365401e14251b33b7a547dd31bfd423f61699ac362026d1af`。
+- 退出码：`0` 成功或“需先退出 Kimi”，`3` 失败或冲突（含策略文件损坏、作用域冲突、目标被阻止、来源不可用或心跳过期），`9` Kimi 版本或源码不受支持。
+- `subagents-status` 只读，不会创建策略文件；`subagents-prepare`/`subagents-launch` 在策略文件缺失时会写入 `inherit`，已存在则保留并校验它属于当前 Kimi 作用域。跨作用域和坏策略会明确报告，不会覆盖。
+- `loaded` 表示匹配运行时、存活进程、有效心跳和当前策略版本已确认；需同时检查 `mode`，它可以是 `force`、`inherit` 或 `blocked`。`prepared` 和 `waiting-launch` 不表示强制策略已生效，`starting` 只表示启动请求已发出。
+- `pending-policy` 表示运行时在等待读取新策略；`policy-unavailable` 表示运行时仍在但策略无法读取，主会话保持可用、子代理被拒绝。`heartbeat-stale` 表示匹配进程仍在但心跳过期，不代表应再次启动。`unavailable`、`outdated`、`conflict` 分别说明来源不可用、来源已变化和副本/状态文件冲突。
 
 ## 跨版本与 `compat`
 
@@ -124,9 +186,9 @@ node bin/kimi-work-gateway.mjs compat
 
 1. 先在 Kimi 自己的“第三方模型网关”设置里断开连接。
 2. 运行 `remove-dns` 并完成授权。
-3. 停止 `serve`。
+3. 停止 `serve`（若用过子代理控制，这一步同时把策略恢复为 `inherit`）。
 
-只删除内容仍与本工具配置一致的 `/etc/resolver/dev.msh.team`（macOS），或只删除带本工具标记的那两行（Windows），不删除别人的解析文件或条目，不改全局 DNS、代理、证书或防火墙。停止 `serve` 后 HTTP 监听消失，不安装常驻服务。
+只删除内容仍与本工具配置一致的 `/etc/resolver/dev.msh.team`（macOS），或只删除带本工具标记的那两行（Windows），不删除别人的解析文件或条目，不改全局 DNS、代理、证书或防火墙。停止 `serve` 后 HTTP 监听消失，不安装常驻服务。删除状态目录里的 `native-runtime/` 即可移除适配后的运行时副本；这不影响 Kimi 安装目录，也不影响 Work 的正常启动。
 
 ## 作为库使用
 
@@ -152,7 +214,9 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 - 首次接入需要管理员授权（macOS resolver / Windows hosts）。准备只有在操作完成且验证成功后才记为 `done`；裁决缺失会记为失败。
 - Windows prepare 可使用已存在的手工同值条目，撤销时保留该条目；只删除标记与内容完整匹配的归属条目对。BOM、原换行和无末尾换行的内容保留；不支持的编码拒绝改写。
 - 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
-- **尚未在真实 Windows + Kimi + UAC 上做端到端验收。** Windows 专用用例会在临时文件上实际执行 PowerShell；macOS 无 PowerShell 时跳过这些用例，不能将其记为已通过。
+- 子代理控制是内部、非官方适配，仅支持 Kimi 3.2.21 的指定源哈希，其他版本直接拒绝；不能保证跨版本可用。
+- **尚未在真实 Windows + Kimi + UAC 上做端到端验收。** Windows 专用用例会在临时文件上实际执行 PowerShell；macOS 无 PowerShell 时跳过这些用例，不能将其记为已通过。Windows 上的子代理控制同样尚未在真机验收，暂按“未验证”对待。
+- 本轮原生回归使用真实 Work 内核与隔离数据，覆盖模型绑定、恢复和坏策略；没有重启正在使用的 Kimi。经 `subagents-launch` 启动完整桌面后再操作 Work 的整条链路仍待单独验收，不能以直接加载内核替代这项证据。
 
 ## 开发
 
@@ -163,6 +227,8 @@ bun scripts/verify-package.mjs  # 打包、解包并在包内重跑测试和检�
 ```
 
 发布包包含 `test/`。测试使用合成凭证与临时文件，包含 Node CLI 的实际 HTTP 调用，以及无须安装 Kimi 的 20 组符号变化检查。安装了 Kimi 的 macOS 还会检查真实解析器；合成检查不保证未来版本兼容。CI 配置在 Ubuntu 上覆盖两个 Bun 版本，在 Windows 上执行专用脚本用例和包内自验；修改工作流后需要实际运行才能确认本次 Windows 结果。
+
+子代理相关测试分两层：`test/cli.test.mjs` 与 `test/subagents.test.mjs` 用注入的替身覆盖策略与运行时契约，不启动 Kimi；`test/subagent-native.test.mjs` 在装有受支持 Kimi 的 macOS 上运行原生用例——在本机真实 Work 内核加本地 mock 上游上完成“父 A → 子 B → 父 A”、Chat 与 Responses 两种协议、effort 传递、配置重建、关闭恢复继承、fork 与 resume 拒绝，全程不产生付费调用。该原生用例在缺少受支持 Kimi 或 Node 版本不足时跳过，跳过不等于通过。
 
 ## 来源与许可证
 

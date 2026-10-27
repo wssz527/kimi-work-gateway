@@ -4,13 +4,14 @@ import path from 'node:path';
 import { readConfig } from './src/config.mjs';
 import { BYOK_DNS_PORT, KimiWorkGateway, NativeByokDNS, NativeSetup, OpenAIBackend,
   copySetupToken, defaultKimiDirectory, defaultStateDirectory, nativeFlagFile,
-  inspectKimiContract, summarizeKimiContract } from './src/index.mjs';
+  inspectKimiContract, summarizeKimiContract, SubagentPolicy, SubagentRuntime } from './src/index.mjs';
+import { readSubagentJSON } from './src/subagent-policy.mjs';
 
 const USAGE = [
   'usage: kimi-work-gateway <command> [options]',
   '',
   'commands:',
-  '  serve --config <file|-> [--instructions <file>] [--state-dir <dir>]',
+  '  serve --config <file|-> [--instructions <file>] [--state-dir <dir>] [--kimi-dir <dir>]',
   '      serve the configured upstream models to Kimi desktop Work',
   '  prepare [--state-dir <dir>] [--kimi-dir <dir>] [--dns-port <port>]',
   '      install the dev.msh.team resolver; may ask for administrator rights',
@@ -18,20 +19,29 @@ const USAGE = [
   '      remove the dev.msh.team resolver; may ask for administrator rights',
   '  compat [--archive <file>] [--config <file>]',
   '      check configured models, or the built-in sample catalog if no config is given',
-  '  status [--state-dir <dir>]',
-  '      show the gateway status file and the native setup receipt',
+  '  status [--state-dir <dir>] [--kimi-dir <dir>]',
+  '      show the gateway status file, the native setup receipt and the subagent state',
   '  copy-token [--state-dir <dir>] [--token-env <name>]',
   '      copy the gateway token to the clipboard',
+  '  subagents-prepare [--state-dir <dir>] [--kimi-dir <dir>] [--archive <file>]',
+  '      adapt a local copy of the installed Kimi runtime for subagent control',
+  '  subagents-status [--state-dir <dir>] [--kimi-dir <dir>] [--archive <file>]',
+  '      report the subagent policy and runtime state; changes nothing',
+  '  subagents-launch [--state-dir <dir>] [--kimi-dir <dir>] [--archive <file>]',
+  '      start Kimi on the adapted runtime copy; quit Kimi first',
   '  help',
   '      show this text',
 ].join('\n');
 
-// serve: 2 for bad config or missing env, 3 for a listener failure.
+// serve: 2 for bad config or missing env, 3 for a listener, state or policy failure.
 // prepare/remove-dns map the setup state: 4 resolver-conflict, 5 cancelled,
 // 6 interrupted, 7 failed, 8 unsupported-platform.
 // compat: 0 verified or unverifiable, 9 incompatible (models would be dropped).
+// subagents-*: 0 prepared or launched (including "quit Kimi first"), 3 failed or
+// conflicting, 9 a Kimi version or source the adapter does not support.
 const SETUP_EXIT = { done: 0, 'resolver-conflict': 4, cancelled: 5, interrupted: 6, failed: 7, 'unsupported-platform': 8 };
 const COMPAT_EXIT = { verified: 0, unverified: 0, unavailable: 0, incompatible: 9 };
+const SUBAGENT_INCOMPATIBLE = new Set(['subagent_runtime_incompatible', 'subagent_runtime_already_adapted']);
 
 function streams(io) {
   return {
@@ -77,10 +87,61 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+// Only the fields that describe the selection, never credentials or upstream
+// settings, are reported in status.json, logs and command output.
+function summarizeSubagentPolicy(policy) {
+  if (policy.mode !== 'force' && policy.mode !== 'blocked') return { mode: 'inherit' };
+  if (policy.mode === 'blocked') return { mode: 'blocked', ...(policy.reason ? { reason: String(policy.reason) } : {}) };
+  return { mode: 'force', model: policy.model, ...(policy.modelAlias ? { modelAlias: policy.modelAlias } : {}),
+    ...(policy.effort === undefined ? {} : { effort: policy.effort }) };
+}
+
+function describeSubagentPolicy(summary) {
+  if (summary.mode === 'force') {
+    return 'force ' + (summary.modelAlias || summary.model) + (summary.effort === undefined ? '' : ' (' + summary.effort + ')');
+  }
+  if (summary.mode === 'blocked') return 'blocked (' + (summary.reason || 'model unavailable') + ')';
+  return 'inherit';
+}
+
+// Reads the policy without creating or touching anything, so `status` stays a
+// pure observer even when the file is missing or foreign.
+function readSubagentPolicy(file) {
+  let document;
+  try { document = readSubagentJSON(file); }
+  catch (failure) { return { state: failure?.code === 'ENOENT' ? 'absent' : 'conflict' }; }
+  if (!document || typeof document !== 'object' || document.schemaVersion !== 1
+    || typeof document.homeDir !== 'string' || !path.isAbsolute(document.homeDir)
+    || !/^[a-f0-9]{64}$/.test(document.revision ?? '')
+    || !['inherit', 'force', 'blocked'].includes(document.mode)) return { state: 'conflict' };
+  return { state: 'ok', document };
+}
+
+// prepare/launch need a policy the adapted runtime can read. A missing file
+// becomes explicit inheritance; an existing one is kept, but only if it belongs
+// to this Kimi scope, otherwise the runtime would silently ignore it.
+function ensureSubagentPolicy(policy) {
+  const current = readSubagentPolicy(policy.file);
+  if (current.state === 'absent') {
+    policy.configure(undefined);
+    return readSubagentPolicy(policy.file);
+  }
+  if (current.state === 'conflict') throw Error('subagent_file_conflict');
+  if (path.resolve(current.document.homeDir) !== policy.homeDir) throw Error('subagent_policy_scope_conflict');
+  return current;
+}
+
+function subagentFailure(io, action, failure) {
+  const code = failure?.message || String(failure);
+  io.err('kimi-work-gateway: subagents-' + action + ' failed (' + code + ')');
+  return SUBAGENT_INCOMPATIBLE.has(code) ? 9 : 3;
+}
+
 async function serveCommand(argv, env, io, overrides = {}) {
-  const flags = parseFlags(argv, ['config', 'instructions', 'state-dir'], ['config']);
+  const flags = parseFlags(argv, ['config', 'instructions', 'state-dir', 'kimi-dir'], ['config']);
   if (!flags) return usageError(io, 'kimi-work-gateway: serve needs --config <file|->');
-  const stateDir = flags['state-dir'] || defaultStateDirectory();
+  const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
+  const kimiDir = flags['kimi-dir'] || defaultKimiDirectory();
   let text;
   if (flags.config === '-') text = await readStdin();
   else {
@@ -112,6 +173,7 @@ async function serveCommand(argv, env, io, overrides = {}) {
   const instanceId = crypto.randomUUID();
   const hostsMode = config.dns.enabled && (overrides.platform || process.platform) === 'win32';
   let published = false;
+  let policy;
   try {
     let url;
     try { url = await gateway.configure({ key: env[config.tokenEnv], port: config.port }); }
@@ -127,14 +189,28 @@ async function serveCommand(argv, env, io, overrides = {}) {
         return 3;
       }
     }
+    // Only after the listener exists: a failed duplicate serve must leave the
+    // policy of the instance that owns the port untouched. Reaching here means
+    // this process is the one Work talks to, so it owns the subagent policy
+    // until it exits; without `subagents` in the config that means inheritance.
+    let subagents;
+    try {
+      policy = new (overrides.SubagentPolicy || SubagentPolicy)({ stateDir, kimiDir });
+      const configured = policy.configure(config.subagents, backend.models);
+      subagents = summarizeSubagentPolicy(configured);
+    } catch (failure) {
+      io.err('kimi-work-gateway: cannot apply the subagent policy (' + (failure?.message || String(failure)) + ')');
+      return 3;
+    }
     try {
       writeStatus(statusFile, { pid: process.pid, instanceId, url, models: backend.models.length,
         dns: { enabled: Boolean(dns), port: config.dns.port, ...(hostsMode ? { mode: 'hosts' } : {}) },
-        at: new Date().toISOString() });
+        subagents, at: new Date().toISOString() });
       published = true;
     } catch { io.err('kimi-work-gateway: cannot write ' + statusFile); return 3; }
     io.out(url);
     io.out(hostsMode ? 'dns provided by Windows hosts' : dns ? 'dns listening on port ' + config.dns.port : 'dns disabled');
+    io.out('subagents ' + describeSubagentPolicy(subagents));
     if (overrides.waitForShutdown) await overrides.waitForShutdown();
     else await new Promise(resolve => {
       const stop = () => {
@@ -149,6 +225,9 @@ async function serveCommand(argv, env, io, overrides = {}) {
     if (dns) await dns.stop();
     await gateway.stop();
     if (published && readStateFile(statusFile)?.value?.instanceId === instanceId) fs.rmSync(statusFile, { force: true });
+    // Restoring inheritance is best effort and never blocks shutdown; close()
+    // only rewrites the file when this process still owns it.
+    try { policy?.close(); } catch (failure) { io.err('kimi-work-gateway: cannot restore the subagent policy (' + (failure?.message || String(failure)) + ')'); }
   }
   return 0;
 }
@@ -168,10 +247,11 @@ async function nativeCommand(action, argv, env, io, overrides) {
   return SETUP_EXIT[result?.state] ?? 7;
 }
 
-async function statusCommand(argv, env, io) {
-  const flags = parseFlags(argv, ['state-dir']);
+async function statusCommand(argv, env, io, overrides = {}) {
+  const flags = parseFlags(argv, ['state-dir', 'kimi-dir']);
   if (!flags) return usageError(io, 'kimi-work-gateway: invalid arguments for status');
-  const stateDir = flags['state-dir'] || defaultStateDirectory();
+  const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
+  const kimiDir = flags['kimi-dir'] || defaultKimiDirectory();
   const gateway = readStateFile(path.join(stateDir, 'status.json'));
   if (!gateway) io.out('gateway: absent');
   else if (!gateway.value) io.out('gateway: unreadable (' + gateway.broken + ')');
@@ -179,6 +259,8 @@ async function statusCommand(argv, env, io) {
     io.out('gateway: pid ' + gateway.value.pid + ' ' + gateway.value.url + ', ' + gateway.value.models + ' models, dns '
       + (gateway.value.dns?.mode === 'hosts' ? 'provided by Windows hosts'
         : gateway.value.dns?.enabled ? 'listening on port ' + gateway.value.dns.port : 'disabled'));
+    // Older status files predate the subagent policy; their absence is not a fault.
+    io.out('gateway subagents: ' + (gateway.value.subagents ? describeSubagentPolicy(gateway.value.subagents) : 'unknown'));
     io.out(gateway.raw);
   }
   const setup = readStateFile(path.join(stateDir, 'native-setup-receipt.json'));
@@ -188,7 +270,61 @@ async function statusCommand(argv, env, io) {
     io.out('native setup: ' + (setup.value.result?.state || setup.value.state || 'unknown'));
     io.out(setup.raw);
   }
+  const policy = new (overrides.SubagentPolicy || SubagentPolicy)({ stateDir, kimiDir });
+  const current = readSubagentPolicy(policy.file);
+  if (current.state === 'absent') io.out('subagents: absent');
+  else if (current.state === 'conflict') io.out('subagents: unreadable or foreign policy file');
+  else {
+    io.out('subagents: ' + describeSubagentPolicy(summarizeSubagentPolicy(current.document))
+      + (path.resolve(current.document.homeDir) === policy.homeDir ? '' : ' (another Kimi scope)'));
+  }
+  const runtime = new (overrides.SubagentRuntime || SubagentRuntime)({ stateDir });
+  io.out('subagent runtime: ' + runtime.inspect().state);
   return 0;
+}
+
+// subagents-*: prepare and launch act on real state, so they refuse to guess.
+// `--archive` pins the Kimi installation; `--kimi-dir` selects the Work home the
+// adapted runtime is allowed to override.
+async function subagentCommand(action, argv, env, io, overrides) {
+  const flags = parseFlags(argv, ['state-dir', 'kimi-dir', 'archive']);
+  if (!flags) return usageError(io, 'kimi-work-gateway: invalid arguments for subagents-' + action);
+  const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
+  const kimiDir = flags['kimi-dir'] || defaultKimiDirectory();
+  const runtime = new (overrides.SubagentRuntime || SubagentRuntime)({
+    stateDir, ...(flags.archive ? { archive: flags.archive } : {}),
+  });
+  const policy = new (overrides.SubagentPolicy || SubagentPolicy)({ stateDir, kimiDir });
+  const report = (current, result, exit) => {
+    io.out(JSON.stringify({ command: 'subagents-' + action, homeDir: policy.homeDir,
+      policy: current.state === 'ok' ? summarizeSubagentPolicy(current.document) : { state: current.state },
+      runtime: result }));
+    return exit;
+  };
+  try {
+    if (action === 'status') {
+      // Read-only: no policy file is created here and the runtime is only inspected.
+      const current = readSubagentPolicy(policy.file);
+      const inspected = runtime.inspect();
+      if (current.state === 'conflict') return report(current, inspected, 3);
+      if (current.state === 'ok' && path.resolve(current.document.homeDir) !== policy.homeDir) {
+        return report({ state: 'scope-conflict' }, inspected, 3);
+      }
+      const failed = current.document?.mode === 'blocked'
+        || ['conflict', 'outdated', 'unavailable', 'policy-unavailable', 'heartbeat-stale'].includes(inspected.state);
+      return report(current, inspected, failed ? 3 : 0);
+    }
+    const current = ensureSubagentPolicy(policy);
+    if (action === 'prepare') return report(current, runtime.prepare(), 0);
+    if (current.document.mode === 'blocked') throw Error('subagent_policy_blocked');
+    // launch() refuses unprepared state too, but failing here keeps the reason
+    // and the exit code in the CLI contract instead of the runtime's wording.
+    const inspected = runtime.inspect();
+    if (!['loaded', 'pending-policy', 'waiting-launch'].includes(inspected.state)) throw Error('subagent_runtime_not_ready');
+    return report(current, await runtime.launch(), 0);
+  } catch (failure) {
+    return subagentFailure(io, action, failure);
+  }
 }
 
 async function copyTokenCommand(argv, env, io, overrides) {
@@ -234,8 +370,11 @@ export async function run(argv, env = process.env, io, overrides = {}) {
     case 'prepare': return nativeCommand('prepare', rest, env, sink, overrides);
     case 'remove-dns': return nativeCommand('remove-dns', rest, env, sink, overrides);
     case 'compat': return compatCommand(rest, env, sink, overrides);
-    case 'status': return statusCommand(rest, env, sink);
+    case 'status': return statusCommand(rest, env, sink, overrides);
     case 'copy-token': return copyTokenCommand(rest, env, sink, overrides);
+    case 'subagents-prepare': return subagentCommand('prepare', rest, env, sink, overrides);
+    case 'subagents-status': return subagentCommand('status', rest, env, sink, overrides);
+    case 'subagents-launch': return subagentCommand('launch', rest, env, sink, overrides);
     default: return usageError(sink, 'kimi-work-gateway: unknown command ' + command);
   }
 }
