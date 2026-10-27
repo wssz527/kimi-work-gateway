@@ -91,29 +91,32 @@ Windows 不需要 DNS 服务，因为 Kimi 用 `dns.promises.lookup` 解析该�
 | `serve --config <file\|->` | 启动本地网关，直到 SIGINT / SIGTERM |
 | `prepare` | 安装单域名解析（macOS resolver / Windows hosts），显示隐藏入口；需管理员授权 |
 | `remove-dns` | 撤销上一项；只删除内容与本工具一致的文件或行 |
-| `compat` | 检查已安装的 Kimi 是否仍接受本工具生成的模型目录 |
+| `compat --config <file>` | 用已安装 Kimi 检查指定模型配置；省略配置只检查内置样例 |
 | `status` | 打印网关状态文件与准备回执 |
 | `copy-token` | 把本地网关 Token 复制到剪贴板 |
 
-`serve` 不会申请管理员权限，也不会改 Kimi 自己的配置。状态文件只有 pid、URL、模型数量，不含任何 key 或对话内容。
+`serve` 不会申请管理员权限，也不会改 Kimi 自己的配置。状态文件包含进程与实例标识、URL、模型数量和 DNS 模式，不含 Key 或对话内容；退出时只清理仍归本实例所有的状态。
 
 ## 跨版本与 `compat`
 
-Kimi 每次发版都会重新混淆它的主进程代码，所以任何按符号名读取安装包的检查都撑不过一次更新。`compat` 改为按**结构**定位 Kimi 的目录解析器（引导 IIFE、字符串解码器、含 `skippedModels` 的解析函数），再把本工具生成的目录喂给它，报告四种状态：
+`compat` 按**结构**定位已安装 Kimi 的目录解析器，再把生成的目录交给它检查。使用 `--config` 检查你配置的全部模型，不需要读取上游 Key 或发起推理请求；省略该参数时只检查内置样例，输出会明确标注检查对象。
 
 | 状态 | 含义 | 退出码 |
 | --- | --- | --- |
-| `verified` | 解析器接受全部模型，0 丢弃 | 0 |
-| `incompatible` | 解析器丢弃了模型，需要处理 | 9 |
-| `unverified` | 认不出这次的混淆结构；集成仍照常工作 | 0 |
-| `unavailable` | 没安装 Kimi 或不在支持平台 | 0 |
+| `verified` | 解析器接受本次检查的全部模型，0 丢弃 | 0 |
+| `incompatible` | 本次检查有模型被丢弃，需要处理 | 9 |
+| `unverified` | 无法识别或执行解析器，兼容性未知 | 0 |
+| `unavailable` | 没找到安装包或平台不支持检查 | 0 |
 
-`unverified` 不影响可用性：本工具只输出公开的 `api.json` 结构，从不修改 Kimi。它只表示“这一次无法预先验证”。
+`unverified` 与 `unavailable` 不阻止网关运行，但不能作为导入或调用成功的证明。最终以 Kimi 的导入提示与实际调用为准。Windows 会尝试用户安装目录和 Program Files；自定义安装位置可用 `--archive` 指定。
 
 ```sh
+node bin/kimi-work-gateway.mjs compat --config gateway.json
+node bin/kimi-work-gateway.mjs compat --archive /path/to/app.asar --config gateway.json
+
+# 只检查 5 个内置样例：
 node bin/kimi-work-gateway.mjs compat
-# kimi: 3.2.21 (app.asar e8d6ca63f736…)
-# runtime contracts: native_byok_flag ok, native_profile_store ok, native_catalog_route ok, catalog_parser ok
+# catalog: sample-models (5 models)
 # parser: verified — 5 models accepted, 0 skipped
 ```
 
@@ -144,17 +147,22 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 ## 已知限制
 
 - 只支持 Chat Completions 与 Responses 两种上游协议，不做跨协议转换。
-- 推理前的模型目录校验以 `listModels()` 的返回为准；上游增删模型后需要重启或重新导入。
-- 首次接入需要一次管理员授权，这是 Kimi 自身的内网检查决定的，不是本工具的选择偏好。
+- 独立 CLI 的模型清单来自配置文件。增删模型或修改能力声明后，先修改 `models` 并重启 `serve`，再在 Kimi 重新导入；仅重新导入不会改变网关配置。
+- 请求的端点必须与模型声明的协议一致，错误请求返回 `409 model_protocol_mismatch`，不会转发到上游。
+- 首次接入需要管理员授权（macOS resolver / Windows hosts）。准备只有在操作完成且验证成功后才记为 `done`；裁决缺失会记为失败。
+- Windows prepare 可使用已存在的手工同值条目，撤销时保留该条目；只删除标记与内容完整匹配的归属条目对。BOM、原换行和无末尾换行的内容保留；不支持的编码拒绝改写。
 - 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
-- Windows 分支已实现并有单元测试与 CI 覆盖，但**尚未在真实 Windows + Kimi + UAC 上做端到端验收**；macOS 分支已在本机实测。
+- **尚未在真实 Windows + Kimi + UAC 上做端到端验收。** Windows 专用用例会在临时文件上实际执行 PowerShell；macOS 无 PowerShell 时跳过这些用例，不能将其记为已通过。
 
 ## 开发
 
 ```sh
-bun test        # Bun 1.4.2 / 1.4.4；1.3.x 的 HTTP 取消语义不同，不在支持范围
+bun test        # Bun 1.4.2 / 1.4.4；1.3.x 不在支持范围
 bun run check   # 语法检查
+bun scripts/verify-package.mjs  # 打包、解包并在包内重跑测试和检查
 ```
+
+发布包包含 `test/`。测试使用合成凭证与临时文件，包含 Node CLI 的实际 HTTP 调用，以及无须安装 Kimi 的 20 组符号变化检查。安装了 Kimi 的 macOS 还会检查真实解析器；合成检查不保证未来版本兼容。CI 配置在 Ubuntu 上覆盖两个 Bun 版本，在 Windows 上执行专用脚本用例和包内自验；修改工作流后需要实际运行才能确认本次 Windows 结果。
 
 ## 来源与许可证
 

@@ -16,8 +16,8 @@ const USAGE = [
   '      install the dev.msh.team resolver; may ask for administrator rights',
   '  remove-dns [--state-dir <dir>] [--kimi-dir <dir>] [--dns-port <port>]',
   '      remove the dev.msh.team resolver; may ask for administrator rights',
-  '  compat [--archive <file>]',
-  '      check the installed Kimi bundle against the catalog this gateway emits',
+  '  compat [--archive <file>] [--config <file>]',
+  '      check configured models, or the built-in sample catalog if no config is given',
   '  status [--state-dir <dir>]',
   '      show the gateway status file and the native setup receipt',
   '  copy-token [--state-dir <dir>] [--token-env <name>]',
@@ -77,7 +77,7 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function serveCommand(argv, env, io) {
+async function serveCommand(argv, env, io, overrides = {}) {
   const flags = parseFlags(argv, ['config', 'instructions', 'state-dir'], ['config']);
   if (!flags) return usageError(io, 'kimi-work-gateway: serve needs --config <file|->');
   const stateDir = flags['state-dir'] || defaultStateDirectory();
@@ -109,6 +109,9 @@ async function serveCommand(argv, env, io) {
   }
   let dns;
   const statusFile = path.join(stateDir, 'status.json');
+  const instanceId = crypto.randomUUID();
+  const hostsMode = config.dns.enabled && (overrides.platform || process.platform) === 'win32';
+  let published = false;
   try {
     let url;
     try { url = await gateway.configure({ key: env[config.tokenEnv], port: config.port }); }
@@ -116,8 +119,8 @@ async function serveCommand(argv, env, io) {
       io.err('kimi-work-gateway: cannot listen on 127.0.0.1:' + config.port + ' (' + failure.message + ')');
       return 3;
     }
-    if (config.dns.enabled) {
-      dns = new NativeByokDNS();
+    if (config.dns.enabled && !hostsMode) {
+      dns = new (overrides.NativeByokDNS || NativeByokDNS)();
       try { await dns.start(config.dns.port); }
       catch (failure) {
         io.err('kimi-work-gateway: cannot start dns on port ' + config.dns.port + ' (' + failure.message + ')');
@@ -125,21 +128,29 @@ async function serveCommand(argv, env, io) {
       }
     }
     try {
-      writeStatus(statusFile, { pid: process.pid, url, models: backend.models.length,
-        dns: { enabled: Boolean(dns), port: config.dns.port }, at: new Date().toISOString() });
+      writeStatus(statusFile, { pid: process.pid, instanceId, url, models: backend.models.length,
+        dns: { enabled: Boolean(dns), port: config.dns.port, ...(hostsMode ? { mode: 'hosts' } : {}) },
+        at: new Date().toISOString() });
+      published = true;
     } catch { io.err('kimi-work-gateway: cannot write ' + statusFile); return 3; }
     io.out(url);
-    io.out(dns ? 'dns listening on port ' + config.dns.port : 'dns disabled');
-    await new Promise(resolve => {
-      process.once('SIGINT', resolve);
-      process.once('SIGTERM', resolve);
+    io.out(hostsMode ? 'dns provided by Windows hosts' : dns ? 'dns listening on port ' + config.dns.port : 'dns disabled');
+    if (overrides.waitForShutdown) await overrides.waitForShutdown();
+    else await new Promise(resolve => {
+      const stop = () => {
+        process.off('SIGINT', stop);
+        process.off('SIGTERM', stop);
+        resolve();
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
     });
   } finally {
     if (dns) await dns.stop();
     await gateway.stop();
-    fs.rmSync(statusFile, { force: true });
+    if (published && readStateFile(statusFile)?.value?.instanceId === instanceId) fs.rmSync(statusFile, { force: true });
   }
-  process.exit(0);
+  return 0;
 }
 
 async function nativeCommand(action, argv, env, io, overrides) {
@@ -166,7 +177,8 @@ async function statusCommand(argv, env, io) {
   else if (!gateway.value) io.out('gateway: unreadable (' + gateway.broken + ')');
   else {
     io.out('gateway: pid ' + gateway.value.pid + ' ' + gateway.value.url + ', ' + gateway.value.models + ' models, dns '
-      + (gateway.value.dns?.enabled ? 'listening on port ' + gateway.value.dns.port : 'disabled'));
+      + (gateway.value.dns?.mode === 'hosts' ? 'provided by Windows hosts'
+        : gateway.value.dns?.enabled ? 'listening on port ' + gateway.value.dns.port : 'disabled'));
     io.out(gateway.raw);
   }
   const setup = readStateFile(path.join(stateDir, 'native-setup-receipt.json'));
@@ -193,23 +205,32 @@ async function copyTokenCommand(argv, env, io, overrides) {
 }
 
 function compatCommand(argv, env, io, overrides) {
-  const flags = parseFlags(argv, ['archive']);
+  const flags = parseFlags(argv, ['archive', 'config']);
   if (!flags) return usageError(io, 'kimi-work-gateway: invalid arguments for compat');
-  const result = (overrides.inspectKimiContract || inspectKimiContract)(flags.archive ? { archive: flags.archive } : {});
-  io.out(summarizeKimiContract(result));
+  let models;
+  if (flags.config) {
+    try {
+      const config = readConfig(JSON.parse(fs.readFileSync(flags.config, 'utf8')));
+      models = new OpenAIBackend({ ...config.upstream, apiKey: 'offline-compat-probe', models: config.models }).models;
+    } catch (failure) {
+      io.err('kimi-work-gateway: invalid config (' + (failure instanceof SyntaxError ? 'not valid JSON' : failure.code || failure.message) + ')');
+      return 2;
+    }
+  }
+  const result = (overrides.inspectKimiContract || inspectKimiContract)({
+    ...(flags.archive ? { archive: flags.archive } : {}), ...(models ? { models } : {}),
+  });
+  io.out(summarizeKimiContract({ ...result, scope: flags.config ? 'configured-models' : 'sample-models',
+    ...(models ? { modelCount: models.length } : {}) }));
   return COMPAT_EXIT[result.state] ?? 0;
 }
 
-// run() returns the exit code instead of exiting; `overrides` swaps in a
-// NativeSetup-like factory, a copySetupToken or a contract inspector so tests
-// never reach the administrator prompt, /etc, the clipboard or the installed
-// Kimi bundle.
 export async function run(argv, env = process.env, io, overrides = {}) {
   const sink = streams(io);
   const [command, ...rest] = argv || [];
   if (!command || command === 'help' || command === '--help' || command === '-h') { sink.out(USAGE); return 0; }
   switch (command) {
-    case 'serve': return serveCommand(rest, env, sink);
+    case 'serve': return serveCommand(rest, env, sink, overrides);
     case 'prepare': return nativeCommand('prepare', rest, env, sink, overrides);
     case 'remove-dns': return nativeCommand('remove-dns', rest, env, sink, overrides);
     case 'compat': return compatCommand(rest, env, sink, overrides);

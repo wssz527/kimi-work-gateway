@@ -56,8 +56,8 @@ function closeUpstream(server) {
 
 const runners = [];
 
-function spawnCLI(args, env) {
-  const child = spawn(process.execPath, [bin, ...args], { env: childEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
+function spawnCLI(args, env, executable = process.execPath) {
+  const child = spawn(executable, [bin, ...args], { env: childEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
   const runner = { child, stdout: '', stderr: '' };
   runners.push(child);
   child.stdout.setEncoding('utf8');
@@ -439,4 +439,65 @@ test('copy-token prints unavailable when the clipboard fails', async () => {
   });
   expect(exit).toBe(0);
   expect(io.lines.out).toEqual(['unavailable']);
+}, 20000);
+
+test('Windows serve uses hosts without creating a UDP listener and preserves a replacement status', async () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'status.json');
+  const io = capture();
+  try {
+    const config = writeConfig(dir, { ...testConfig('http://127.0.0.1:9/v1'), dns: { enabled: true } });
+    const exit = await run(['serve', '--config', config, '--state-dir', dir], { [KEY_ENV]: KEY, [TOKEN_ENV]: TOKEN }, io, {
+      platform: 'win32',
+      NativeByokDNS: class { constructor() { throw Error('must_not_start_dns'); } },
+      waitForShutdown: async () => {
+        const status = JSON.parse(readFileSync(file, 'utf8'));
+        expect(status.dns).toEqual({ enabled: false, port: 53535, mode: 'hosts' });
+        const response = await fetch(status.url + '/models/api.json', { headers: { Authorization: 'Bearer ' + TOKEN } });
+        expect(response.status).toBe(200);
+        expect(Object.keys(await response.json()).sort()).toEqual(['kimi', 'responses']);
+        writeFileSync(file, '{"instanceId":"replacement"}');
+      },
+    });
+    expect(exit).toBe(0);
+    expect(io.lines.out).toContain('dns provided by Windows hosts');
+    expect(readFileSync(file, 'utf8')).toBe('{"instanceId":"replacement"}');
+  } finally { clean(dir); }
+});
+
+test('a duplicate serve failure preserves the existing instance status', async () => {
+  const { server } = await startUpstream();
+  const dir = tempDir();
+  const file = path.join(dir, 'status.json');
+  try {
+    const original = '{"pid":4242,"instanceId":"running-instance"}';
+    writeFileSync(file, original);
+    const config = writeConfig(dir, { ...testConfig('http://127.0.0.1:9/v1'), port: server.address().port });
+    const exit = await run(['serve', '--config', config, '--state-dir', dir], { [KEY_ENV]: KEY, [TOKEN_ENV]: TOKEN }, capture());
+    expect(exit).toBe(3);
+    expect(readFileSync(file, 'utf8')).toBe(original);
+  } finally { await closeUpstream(server); clean(dir); }
+});
+
+test('the Node CLI serves both catalogs and both inference protocols', async () => {
+  const { server, seen } = await startUpstream();
+  const dir = tempDir();
+  let runner;
+  try {
+    const config = writeConfig(dir, testConfig('http://127.0.0.1:' + server.address().port + '/v1'));
+    runner = spawnCLI(['serve', '--config', config, '--state-dir', dir], { [KEY_ENV]: KEY, [TOKEN_ENV]: TOKEN }, 'node');
+    const stdout = await waitForStdout(runner, /http:\/\/127\.0\.0\.1:\d+\/v1\n/);
+    const url = stdout.split('\n')[0];
+    const headers = { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };
+    const catalog = await fetch(url + '/models/api.json', { headers });
+    expect(catalog.status).toBe(200); expect(Object.keys(await catalog.json()).sort()).toEqual(['kimi', 'responses']);
+    const list = await fetch(url + '/models', { headers });
+    expect((await list.json()).data).toHaveLength(2);
+    for (const [endpoint, model] of [['/chat/completions', MODELS[0].id], ['/responses', MODELS[1].id]]) {
+      const response = await fetch(url + endpoint, { method: 'POST', headers, body: JSON.stringify({ model, messages: [], input: 'hello' }) });
+      expect(response.status).toBe(200); await response.text();
+    }
+    expect(seen).toHaveLength(2);
+    expect(seen.map(row => row.url)).toEqual(['/v1/chat/completions', '/v1/responses']);
+  } finally { await stop(runner); await closeUpstream(server); clean(dir); }
 }, 20000);

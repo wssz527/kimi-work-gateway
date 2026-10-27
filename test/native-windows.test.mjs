@@ -24,9 +24,7 @@ test('windows setup runs the hosts script and reveals the same flag', async () =
   try {
     const result = await f.setup.run(f.request('prepare'));
     expect(result).toEqual({ action: 'prepare', state: 'done' });
-    // The path is embedded as a JSON string literal, so its backslashes are
-    // escaped in the script text.
-    expect(script).toContain(JSON.stringify(f.hostsPath));
+    expect(script).toContain("$path = '" + f.hostsPath.replaceAll("'", "''") + "'");
     expect(script).toContain(HOSTS_MARKER);
     expect(script).toContain(hostsEntry());
     expect(script).toContain('ipconfig /flushdns');
@@ -46,56 +44,40 @@ test('a platform other than macos and windows is still refused before any prompt
   } finally { f.cleanup(); }
 });
 
-test('the hosts editor adds its two lines and leaves everything else byte-identical', () => {
-  const original = '127.0.0.1 localhost\r\n10.0.0.5 build.local\r\n';
+test('the hosts editor round-trips BOM, mixed newlines, blank lines and the original EOF', () => {
+  for (const original of ['', '127.0.0.1 localhost', '127.0.0.1 localhost\r\n# mixed\n\n', '\uFEFF# comment\nlast']) {
+    expect(updateHosts(original, 'remove-dns')).toEqual({ content: original, changed: false });
+    const added = updateHosts(original, 'prepare');
+    expect(added.changed).toBe(true);
+    expect(updateHosts(added.content, 'prepare')).toEqual({ content: added.content, changed: false });
+    expect(updateHosts(added.content, 'remove-dns').content).toBe(original);
+  }
+  const original = Buffer.from([239, 187, 191, 35, 32, 255, 13, 10]);
   const added = updateHosts(original, 'prepare');
-  expect(added.content).toBe(original + HOSTS_MARKER + '\r\n' + hostsEntry() + '\r\n');
-  expect(added.content.split('\r\n')[0]).toBe('127.0.0.1 localhost');
-
-  const removed = updateHosts(added.content, 'remove-dns');
-  expect(removed.content).toBe(original);
+  expect(updateHosts(added.content, 'remove-dns').content).toEqual(original);
+  expect(() => updateHosts(Buffer.from([255, 254, 0, 65]), 'prepare')).toThrow('unsupported_hosts_encoding');
 });
 
-test('the hosts editor is idempotent and preserves a BOM', () => {
-  const original = '\uFEFF127.0.0.1 localhost\n';
-  const once = updateHosts(original, 'prepare');
-  const twice = updateHosts(once.content, 'prepare');
-  expect(twice.content).toBe(once.content);
-  expect(twice.changed).toBe(false);
-  expect(once.content.startsWith('\uFEFF')).toBe(true);
-  expect(once.content.match(new RegExp(hostsEntry().replaceAll('.', '\\.'), 'g'))).toHaveLength(1);
+test('manual entries satisfy prepare without granting removal ownership', () => {
+  for (const entry of [hostsEntry(), '10.255.255.254\tDEV.MSH.TEAM # manual']) {
+    const original = '127.0.0.1 localhost\r\n' + entry;
+    for (const action of ['prepare', 'remove-dns']) {
+      expect(updateHosts(original, action)).toEqual({ content: original, changed: false });
+    }
+  }
 });
 
-test('an existing entry written by hand is adopted, not duplicated', () => {
-  const original = '127.0.0.1 localhost\n' + hostsEntry() + '\n';
-  const prepared = updateHosts(original, 'prepare');
-  // Adopted as it stands: the file the user maintains is not rewritten.
-  expect(prepared.content).toBe(original);
-  expect(prepared.changed).toBe(false);
-  // Removing still works, because the entry is the one this tool manages.
-  expect(updateHosts(prepared.content, 'remove-dns').content).toBe('127.0.0.1 localhost\n');
-});
-
-test('another program claiming the name is a conflict, never shadowed', () => {
-  const original = '127.0.0.1 localhost\n1.2.3.4 dev.msh.team\n';
-  expect(() => updateHosts(original, 'prepare')).toThrow('resolver_conflict');
-  expect(() => updateHosts(original, 'remove-dns')).toThrow('resolver_conflict');
-  // Comments mentioning the name are not a claim.
-  const commented = '# see dev.msh.team\n127.0.0.1 localhost\n';
-  expect(() => updateHosts(commented, 'prepare')).not.toThrow();
-});
-
-test('removing when nothing was installed changes nothing', () => {
-  const original = '127.0.0.1 localhost\n';
-  expect(updateHosts(original, 'remove-dns').content).toBe(original);
+test('foreign aliases and damaged owned pairs are preserved as conflicts', () => {
+  for (const original of ['192.0.2.1 DEV.MSH.TEAM\n', '10.255.255.254 dev.msh.team other\n', HOSTS_MARKER + '\n', HOSTS_MARKER + '\n192.0.2.1 dev.msh.team\n']) {
+    for (const action of ['prepare', 'remove-dns']) expect(() => updateHosts(original, action)).toThrow('resolver_conflict');
+  }
+  expect(() => updateHosts('127.0.0.1 localhost # dev.msh.team', 'prepare')).not.toThrow();
+  const legacy = '127.0.0.1 localhost\n' + HOSTS_MARKER + '\n' + hostsEntry() + '\n';
+  expect(updateHosts(legacy, 'remove-dns').content).toBe('127.0.0.1 localhost\n');
 });
 
 test('a conflict raised by the elevated script maps to resolver-conflict', async () => {
-  const f = fixture('win32', async () => {
-    const failure = new Error('command failed');
-    failure.stderr = 'resolver_conflict';
-    throw failure;
-  });
+  const f = fixture('win32', async () => { throw verdictFailure('resolver_conflict'); });
   try {
     expect((await f.setup.run(f.request('prepare'))).state).toBe('resolver-conflict');
     expect(fs.existsSync(f.flagFile)).toBe(false);
@@ -104,64 +86,32 @@ test('a conflict raised by the elevated script maps to resolver-conflict', async
 
 test('a cancelled UAC prompt maps to cancelled without retrying', async () => {
   let calls = 0;
-  const f = fixture('win32', async () => {
-    calls++;
-    const failure = new Error('The operation was canceled by the user.');
-    throw failure;
-  });
+  const f = fixture('win32', async () => { calls++; throw Error('setup_cancelled'); });
   try {
-    expect((await f.setup.run(f.request('prepare'))).state).toBe('cancelled');
+    const request = f.request('prepare');
+    expect((await f.setup.run(request)).state).toBe('cancelled');
+    expect((await f.setup.run(request)).state).toBe('cancelled');
     expect(calls).toBe(1);
-  } finally { f.cleanup(); }
-});
-
-test('the windows script writes its verdict to a file the caller reads back', () => {
-  // `Start-Process -Verb RunAs` returns neither the exit code nor the stderr of
-  // the elevated child, so the verdict has to travel through a file. Both the
-  // conflict path and the success path must record it.
-  const report = 'C:\\Temp\\report';
-  const prepare = hostsScript('prepare', DEFAULT_HOSTS, true, report);
-  expect(prepare).toContain('Set-Content -LiteralPath ' + JSON.stringify(report));
-  expect(prepare).toContain('-Value "done"');
-  expect(prepare).toContain('-Value "resolver_conflict"');
-  // A script generated without a report path stays valid on its own.
-  const bare = hostsScript('prepare', DEFAULT_HOSTS);
-  expect(bare).not.toContain('Set-Content -LiteralPath "C:\\\\Temp\\\\report"');
-  expect(bare).toContain('resolver_conflict');
-});
-
-test('the elevated report decides the outcome, and a missing one is not a failure', () => {
-  // `Start-Process -Verb RunAs` gives the parent neither the exit code nor the
-  // stderr of the child, so the verdict travels through a file. Only an
-  // explicit verdict becomes an error.
-  expect(verdictFailure('resolver_conflict').stderr).toBe('resolver_conflict');
-  expect(verdictFailure('anything_else').stderr).toBe('anything_else');
-  // A cancelled prompt leaves no report at all, so it must not look like one.
-  expect(verdictFailure('')).toBe(null);
-  expect(verdictFailure('done')).toBe(null);
-});
-
-test('a conflict reported by the elevated child reaches the setup state', async () => {
-  // Mirrors the real path: the child exits normally, and the conflict is only
-  // visible in the report file the parent reads afterwards.
-  const f = fixture('win32', async (_script, report) => {
-    fs.writeFileSync(report, 'resolver_conflict');
-    throw verdictFailure('resolver_conflict');
-  });
-  try {
-    expect((await f.setup.run(f.request('prepare'))).state).toBe('resolver-conflict');
     expect(fs.existsSync(f.flagFile)).toBe(false);
   } finally { f.cleanup(); }
 });
 
-test('the windows script rewrites only the lines it owns', () => {
-  const script = hostsScript('prepare', DEFAULT_HOSTS);
-  expect(script).toContain(JSON.stringify(DEFAULT_HOSTS));
-  expect(script).toContain('$bom');
-  expect(script).toContain('ipconfig /flushdns');
-  // It must never clobber the file wholesale.
-  expect(script).not.toContain('Set-Content -Value @"');
-  expect(hostsScript('remove-dns')).not.toContain('[void]$kept.Add($marker)');
+test('only an explicit successful verdict is accepted', () => {
+  expect(verdictFailure('resolver_conflict').stderr).toBe('resolver_conflict');
+  expect(verdictFailure('anything_else').stderr).toBe('anything_else');
+  expect(verdictFailure('').message).toBe('setup_report_missing');
+  expect(verdictFailure('done')).toBe(null);
+});
+
+test('the windows script uses literal paths, byte writes and readback verification', () => {
+  const script = hostsScript('prepare', DEFAULT_HOSTS, true, "C:\\Temp\\user's $report");
+  expect(script).toContain("$path = '" + DEFAULT_HOSTS + "'");
+  expect(script).toContain("$report = 'C:\\Temp\\user''s $report'");
+  expect(script).toContain('[System.IO.File]::WriteAllBytes');
+  expect(script).toContain('hosts_verify_failed');
+  expect(script).toContain('Write-Verdict "done"');
+  expect(script).toContain("-split '\\s+'");
+  expect(script).not.toContain('Set-Content');
 });
 
 test('the macos resolver script is unchanged byte for byte', () => {

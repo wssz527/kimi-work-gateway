@@ -509,3 +509,15 @@ test('instructionsFile inserts one managed system message idempotently', async (
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('a model cannot be sent to an endpoint for another protocol', async () => {
+  const app = await fixture();
+  try {
+    for (const [endpoint, model] of [['/responses', 'byok-kth-kimi/kimi-plain-model'], ['/chat/completions', 'vendor/model']]) {
+      const response = await request(app.url + endpoint, { body: { model, input: 'hello', messages: [] } });
+      expect(response.status).toBe(409);
+      expect((await response.json()).error.code).toBe('model_protocol_mismatch');
+    }
+    expect(app.requests).toHaveLength(0);
+  } finally { await app.close(); }
+});

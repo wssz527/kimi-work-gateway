@@ -20,10 +20,8 @@ jobs:
           node-version: 20
       - run: bun test
       - run: bun run check
+      - run: bun scripts/verify-package.mjs
 
-  # Windows is a supported target, not a port in progress. The installed-Kimi
-  # probe skips itself there (it reads a macOS bundle); everything else runs,
-  # including the hosts editor and the platform dispatch in the setup code.
   windows:
     runs-on: windows-latest
     steps:
@@ -36,3 +34,4 @@ jobs:
           node-version: 20
       - run: bun test
       - run: bun run check
+      - run: bun scripts/verify-package.mjs

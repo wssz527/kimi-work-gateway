@@ -76,9 +76,8 @@ test('validateModels accepts empty and slashless IDs and returns normalized copi
   expect(result[0].inputModalities).not.toBe(rows[0].inputModalities);
   expect(result[0].reasoningEfforts).not.toBe(rows[0].reasoningEfforts);
   expect(validateModels([])).toEqual([]);
-  expect(validateModels([model({ reasoningEfforts: ['low'], defaultEffort: 'missing' })])).toEqual([
-    model({ reasoningEfforts: ['low'] }),
-  ]);
+  expect(() => validateModels([model({ reasoningEfforts: ['low'], defaultEffort: 'missing' })])).toThrow('invalid_models');
+  expect(() => validateModels([model({ defaultEffort: 'high' })])).toThrow('invalid_models');
 });
 
 test('validateModels rejects invalid containers, rows, IDs, protocols, and context windows', () => {
