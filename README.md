@@ -4,7 +4,7 @@
 
 它依赖 Kimi 自带的**第三方模型网关**设置，不修改 Kimi 安装包、`app.asar`、可执行文件或签名，不开调试端口，不注入模型菜单。
 
-独立网关只有命令行界面，**没有 web 面板**：全部配置来自配置文件与命令行参数。
+独立网关提供命令行与**本机 Web 控制面板**。面板可查看网关、模型目录和子代理运行状态，切换子代理模型与推理档位，并执行运行时准备、启动 Kimi、首次接入准备和复制 Token。主模型仍在 Kimi Work 菜单里选择。
 
 **支持 macOS 与 Windows。** Linux 未适配。
 
@@ -71,6 +71,26 @@ node bin/kimi-work-gateway.mjs prepare
 
 Windows 不需要 DNS 服务，因为 Kimi 用 `dns.promises.lookup` 解析该域名，Windows 上它读的就是 hosts 文件；Kimi 只检查结果是私网地址，不会真的去连接。
 
+## Web 控制面板
+
+使用同一份配置与环境变量，将 `serve` 换成 `panel`：
+
+```sh
+node bin/kimi-work-gateway.mjs panel --config gateway.json
+# 如需改面板端口：追加 --ui-port 3437
+```
+
+终端会打印网关地址与 `panel http://127.0.0.1:3427/#key=…`。在本机浏览器打开完整面板链接；面板会把会话密钥留在当前标签页，并从地址栏移除它。刷新页面可继续使用，重启命令后需使用新链接。面板默认只监听 `127.0.0.1:3427`，网关仍使用配置中的端口；不要与已接入的 Magpie 插件同时占用默认网关端口。
+
+- **子代理选择**：选“继承主模型”，或指定目录中支持工具的模型与推理档位，点击应用后保存到原配置并立即更新策略。面板不会覆盖配置的其他字段；多个页面同时保存会提示版本冲突。
+- **运行时状态**：分别显示已保存目标、当前策略与 Kimi 运行时证据。只有匹配副本的进程、心跳、策略版本和目标一致时才显示强制模型已加载。切换只影响后续新建子代理，已有子代理继续使用原模型。
+- **准备与启动**：可准备本地副本、启动适配的 Kimi、准备原生接入或撤销解析。涉及管理员权限时仍由系统授权框确认；已运行 Kimi 时会提示先退出，不结束进程、不自动重试。
+- **复制 Token**：由服务端复制到本机系统剪贴板，API 与页面不会接收或显示 Token。主模型继续在 Kimi Work 菜单切换。
+
+面板只从当前配置提供模型目录；修改上游、端口、模型能力等基础配置后需要重启。`panel` 必须使用实际 JSON 文件，不接受 `--config -`。退出命令会关闭两个监听并按归属恢复继承。
+
+控制 API 为本机面板使用：`GET /api/state` 返回版本 1 的状态；`POST /api/subagents` 携带 `revision`、`mode` 和可选的 `model`、`effort`；`POST /api/actions` 携带一次操作生成并在重试时复用的 `id`、`at`、`action`。操作请求五分钟内有效，先持久记录再执行，重复请求返回原结果，中断后不重放。API 使用面板专用 Bearer 密钥、精确 Host/Origin 检查和 JSON 请求体，推理端点仍拒绝网页来源；面板不公开凭证、对话或用量估算。
+
 ## 模型声明
 
 | 字段 | 必填 | 说明 |
@@ -92,6 +112,7 @@ Windows 不需要 DNS 服务，因为 Kimi 用 `dns.promises.lookup` 解析该�
 | 命令 | 作用 |
 | --- | --- |
 | `serve --config <file\|->` | 启动本地网关，直到 SIGINT / SIGTERM |
+| `panel --config <file> [--ui-port <port>]` | 启动网关与本机 Web 控制面板，默认面板端口 3427 |
 | `prepare` | 安装单域名解析（macOS resolver / Windows hosts），显示隐藏入口；需管理员授权 |
 | `remove-dns` | 撤销上一项；只删除内容与本工具一致的文件或行 |
 | `compat --config <file>` | 用已安装 Kimi 检查指定模型配置；省略配置只检查内置样例 |
@@ -126,7 +147,7 @@ Windows 不需要 DNS 服务，因为 Kimi 用 `dns.promises.lookup` 解析该�
   "reasoning": true, "reasoningEfforts": ["low", "high"] }
 ```
 
-省略 `subagents` 或写 `{ "mode": "inherit" }` 表示使用 Kimi 原来的子代理绑定。指向未声明、不支持工具或 `effort` 不在 `reasoningEfforts` 内的模型时，配置会直接被拒绝，`serve` 在监听前退出（退出码 2）。推理档位需使用小写标识符，最长 32 字符。更改配置后重启 `serve --config gateway.json`，保持网关运行，再进行下面的准备和启动。
+省略 `subagents` 或写 `{ "mode": "inherit" }` 表示使用 Kimi 原来的子代理绑定。指向未声明、不支持工具或 `effort` 不在 `reasoningEfforts` 内的模型时，配置会直接被拒绝，`serve` 在监听前退出（退出码 2）。推理档位需使用小写标识符，最长 32 字符。使用面板可直接保存并应用子代理选择；手动更改配置时重启 `serve --config gateway.json` 或 `panel --config gateway.json`。保持网关运行，再进行下面的准备和启动。
 
 ```sh
 # 1. 适配本地运行时副本（幂等，不改安装目录）

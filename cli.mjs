@@ -6,6 +6,8 @@ import { BYOK_DNS_PORT, KimiWorkGateway, NativeByokDNS, NativeSetup, OpenAIBacke
   copySetupToken, defaultKimiDirectory, defaultStateDirectory, nativeFlagFile,
   inspectKimiContract, summarizeKimiContract, SubagentPolicy, SubagentRuntime } from './src/index.mjs';
 import { readSubagentJSON } from './src/subagent-policy.mjs';
+import { PanelController } from './src/panel-controller.mjs';
+import { GatewayPanel } from './src/panel.mjs';
 
 const USAGE = [
   'usage: kimi-work-gateway <command> [options]',
@@ -13,6 +15,8 @@ const USAGE = [
   'commands:',
   '  serve --config <file|-> [--instructions <file>] [--state-dir <dir>] [--kimi-dir <dir>]',
   '      serve the configured upstream models to Kimi desktop Work',
+  '  panel --config <file> [--ui-port <port>] [--instructions <file>] [--state-dir <dir>] [--kimi-dir <dir>]',
+  '      serve the gateway with a local web control panel (default port 3427)',
   '  prepare [--state-dir <dir>] [--kimi-dir <dir>] [--dns-port <port>]',
   '      install the dev.msh.team resolver; may ask for administrator rights',
   '  remove-dns [--state-dir <dir>] [--kimi-dir <dir>] [--dns-port <port>]',
@@ -138,14 +142,21 @@ function subagentFailure(io, action, failure) {
 }
 
 async function serveCommand(argv, env, io, overrides = {}) {
-  const flags = parseFlags(argv, ['config', 'instructions', 'state-dir', 'kimi-dir'], ['config']);
-  if (!flags) return usageError(io, 'kimi-work-gateway: serve needs --config <file|->');
+  const panelEnabled = overrides.panel === true;
+  const flags = parseFlags(argv, ['config', 'instructions', 'state-dir', 'kimi-dir', ...(panelEnabled ? ['ui-port'] : [])], ['config']);
+  if (!flags || panelEnabled && flags.config === '-') {
+    return usageError(io, 'kimi-work-gateway: ' + (panelEnabled ? 'panel needs --config <file>' : 'serve needs --config <file|->'));
+  }
+  const uiPort = flags['ui-port'] === undefined ? 3427 : Number(flags['ui-port']);
+  if (panelEnabled && (!Number.isInteger(uiPort) || uiPort < 0 || uiPort > 65535)) {
+    return usageError(io, 'kimi-work-gateway: --ui-port must be an integer from 0 to 65535');
+  }
   const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
   const kimiDir = flags['kimi-dir'] || defaultKimiDirectory();
   let text;
   if (flags.config === '-') text = await readStdin();
   else {
-    try { text = fs.readFileSync(flags.config, 'utf8'); }
+    try { text = panelEnabled ? JSON.stringify(readSubagentJSON(flags.config)) : fs.readFileSync(flags.config, 'utf8'); }
     catch { io.err('kimi-work-gateway: cannot read config file ' + flags.config); return 2; }
   }
   let config;
@@ -168,12 +179,11 @@ async function serveCommand(argv, env, io, overrides = {}) {
     io.err('kimi-work-gateway: invalid config (' + failure.message + ')');
     return 2;
   }
-  let dns;
+  let dns, policy, panel, controller;
   const statusFile = path.join(stateDir, 'status.json');
   const instanceId = crypto.randomUUID();
   const hostsMode = config.dns.enabled && (overrides.platform || process.platform) === 'win32';
   let published = false;
-  let policy;
   try {
     let url;
     try { url = await gateway.configure({ key: env[config.tokenEnv], port: config.port }); }
@@ -202,15 +212,34 @@ async function serveCommand(argv, env, io, overrides = {}) {
       io.err('kimi-work-gateway: cannot apply the subagent policy (' + (failure?.message || String(failure)) + ')');
       return 3;
     }
+    if (panelEnabled) {
+      try {
+        controller = new (overrides.PanelController || PanelController)({
+          configFile: flags.config, config, gateway, backend, stateDir, kimiDir, policy,
+          onPolicy: value => {
+            const current = readStateFile(statusFile)?.value;
+            if (current?.instanceId !== instanceId) return;
+            try { writeStatus(statusFile, { ...current, subagents: summarizeSubagentPolicy(value) }); }
+            catch { io.err('kimi-work-gateway: cannot update ' + statusFile); }
+          },
+        });
+        panel = new (overrides.GatewayPanel || GatewayPanel)({ controller });
+        await panel.start({ port: uiPort });
+      } catch (failure) {
+        io.err('kimi-work-gateway: cannot start panel (' + (failure?.message || String(failure)) + ')');
+        return 3;
+      }
+    }
     try {
       writeStatus(statusFile, { pid: process.pid, instanceId, url, models: backend.models.length,
         dns: { enabled: Boolean(dns), port: config.dns.port, ...(hostsMode ? { mode: 'hosts' } : {}) },
-        subagents, at: new Date().toISOString() });
+        subagents, ...(panel ? { panel: { url: panel.url } } : {}), at: new Date().toISOString() });
       published = true;
     } catch { io.err('kimi-work-gateway: cannot write ' + statusFile); return 3; }
     io.out(url);
     io.out(hostsMode ? 'dns provided by Windows hosts' : dns ? 'dns listening on port ' + config.dns.port : 'dns disabled');
     io.out('subagents ' + describeSubagentPolicy(subagents));
+    if (panel) io.out('panel ' + panel.entryURL);
     if (overrides.waitForShutdown) await overrides.waitForShutdown();
     else await new Promise(resolve => {
       const stop = () => {
@@ -222,8 +251,10 @@ async function serveCommand(argv, env, io, overrides = {}) {
       process.once('SIGTERM', stop);
     });
   } finally {
-    if (dns) await dns.stop();
-    await gateway.stop();
+    for (const [name, stop] of [['panel', () => panel?.stop()], ['panel controller', () => controller?.close()],
+      ['dns', () => dns?.stop()], ['gateway', () => gateway.stop()]]) {
+      try { await stop(); } catch { io.err('kimi-work-gateway: cannot stop ' + name); }
+    }
     if (published && readStateFile(statusFile)?.value?.instanceId === instanceId) fs.rmSync(statusFile, { force: true });
     // Restoring inheritance is best effort and never blocks shutdown; close()
     // only rewrites the file when this process still owns it.
@@ -367,6 +398,7 @@ export async function run(argv, env = process.env, io, overrides = {}) {
   if (!command || command === 'help' || command === '--help' || command === '-h') { sink.out(USAGE); return 0; }
   switch (command) {
     case 'serve': return serveCommand(rest, env, sink, overrides);
+    case 'panel': return serveCommand(rest, env, sink, { ...overrides, panel: true });
     case 'prepare': return nativeCommand('prepare', rest, env, sink, overrides);
     case 'remove-dns': return nativeCommand('remove-dns', rest, env, sink, overrides);
     case 'compat': return compatCommand(rest, env, sink, overrides);

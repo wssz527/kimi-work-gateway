@@ -22,7 +22,7 @@ function expand(patterns) {
 
 const targets = expand(process.argv.slice(2).length
   ? process.argv.slice(2)
-  : ['src/*.mjs', 'cli.mjs', 'bin/*.mjs']);
+  : ['src/*.mjs', 'cli.mjs', 'bin/*.mjs', 'ui/*.js']);
 
 let failed = 0;
 for (const relative of targets) {
