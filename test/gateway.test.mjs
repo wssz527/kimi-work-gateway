@@ -1,6 +1,7 @@
 import { test, expect } from 'bun:test';
 import http from 'node:http';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { KimiWorkGateway, nativeCatalog, validateModels } from '../src/gateway.mjs';
 import { OpenAIBackend } from '../src/openai-backend.mjs';
@@ -462,7 +463,9 @@ test('malformed JSON and bodies over 32 MiB are rejected before forwarding', asy
 });
 
 test('instructionsFile inserts one managed system message idempotently', async () => {
-  const directory = await mkdtemp(path.join(import.meta.dirname, '.gateway-instructions-'));
+  // Under the system temp dir, not the repository: a run that is interrupted
+  // must not leave a tracked-looking directory behind in `test/`.
+  const directory = await mkdtemp(path.join(tmpdir(), 'kwg-instructions-'));
   const file = path.join(directory, 'AGENTS.md');
   await writeFile(file, 'Use the shared rules.', 'utf8');
   const app = await fixture({ instructionsFile: file });

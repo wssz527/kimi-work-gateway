@@ -79,7 +79,10 @@ test('an invalid native flag is rejected before administrator authorisation', as
   } finally { f.cleanup(); }
 });
 
-test('the resolver script installs, rewrites nothing, and preserves unrelated files and symlinks', () => {
+// The resolver script is a POSIX shell script that only macOS runs, so it is
+// exercised on a POSIX host; Windows CI covers the hosts editor instead.
+test.skipIf(process.platform === 'win32')(
+  'the resolver script installs, rewrites nothing, and preserves unrelated files and symlinks', () => {
   const f = fixture();
   try {
     const source = path.join(f.directory, "candidate's resolver");
@@ -100,7 +103,7 @@ test('the resolver script installs, rewrites nothing, and preserves unrelated fi
     expect(() => run('prepare')).toThrow();
     expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
   } finally { f.cleanup(); }
-});
+  });
 
 test('remove-dns leaves the hidden entry alone', async () => {
   const f = fixture();
@@ -112,8 +115,11 @@ test('remove-dns leaves the hidden entry alone', async () => {
   } finally { f.cleanup(); }
 });
 
+// Cross-repository check: byte-identical resolver text is what lets an
+// existing installation upgrade without a conflict. Both checkouts sit side
+// by side in this workspace, and the test skips when they do not.
 test('the resolver file bytes match the Magpie plugin so upgrades do not conflict', async () => {
-  const plugin = '/Users/wssz277/new project/任务 6/work/magpie-agent-kimi-work-byok/native-dns.mjs';
+  const plugin = path.join(import.meta.dirname, '..', '..', 'magpie-agent-kimi-work-byok', 'native-dns.mjs');
   if (!fs.existsSync(plugin)) return;
   const { resolverConfiguration: upstream } = await import(plugin);
   for (const port of [53535, 54000]) {

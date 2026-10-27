@@ -4,7 +4,7 @@
 
 它依赖 Kimi 自带的**第三方模型网关**设置，不修改 Kimi 安装包、`app.asar`、可执行文件或签名，不开调试端口，不注入模型菜单。
 
-**首版只声明 macOS。** Windows / Linux 尚未适配。
+**支持 macOS 与 Windows。** Linux 未适配。
 
 ## 它解决什么问题
 
@@ -46,7 +46,7 @@ export KIMI_WORK_GATEWAY_TOKEN=...
 node bin/kimi-work-gateway.mjs serve --config gateway.json
 ```
 
-第一次接入还要做一次准备，它会请求 macOS 管理员授权，只写入 `/etc/resolver/dev.msh.team`：
+第一次接入还要做一次准备，它会请求系统管理员授权（macOS 写 `/etc/resolver/dev.msh.team`，Windows 只改 hosts 的两行）：
 
 ```sh
 node bin/kimi-work-gateway.mjs prepare
@@ -58,6 +58,15 @@ node bin/kimi-work-gateway.mjs prepare
 - **Token**：`copy-token` 复制到剪贴板的那个值
 
 点“测试连接并导入模型”，回到 Work，点输入框旁的模型名即可切换。
+
+准备在你的机器上具体做了什么：
+
+| 平台 | 写入 | 是否需要常驻进程 |
+| --- | --- | --- |
+| macOS | `/etc/resolver/dev.msh.team`，指向本机 DNS | 是，`serve` 同时监听 UDP 53535 |
+| Windows | `%SystemRoot%\System32\drivers\etc\hosts` 的两行 | 否，只需 HTTP 网关 |
+
+Windows 不需要 DNS 服务，因为 Kimi 用 `dns.promises.lookup` 解析该域名，Windows 上它读的就是 hosts 文件；Kimi 只检查结果是私网地址，不会真的去连接。
 
 ## 模型声明
 
@@ -80,12 +89,33 @@ node bin/kimi-work-gateway.mjs prepare
 | 命令 | 作用 |
 | --- | --- |
 | `serve --config <file\|->` | 启动本地网关，直到 SIGINT / SIGTERM |
-| `prepare` | 安装单域名 resolver，显示隐藏入口；需管理员授权 |
-| `remove-dns` | 撤销 resolver；只删除内容与本工具一致的解析文件 |
+| `prepare` | 安装单域名解析（macOS resolver / Windows hosts），显示隐藏入口；需管理员授权 |
+| `remove-dns` | 撤销上一项；只删除内容与本工具一致的文件或行 |
+| `compat` | 检查已安装的 Kimi 是否仍接受本工具生成的模型目录 |
 | `status` | 打印网关状态文件与准备回执 |
 | `copy-token` | 把本地网关 Token 复制到剪贴板 |
 
 `serve` 不会申请管理员权限，也不会改 Kimi 自己的配置。状态文件只有 pid、URL、模型数量，不含任何 key 或对话内容。
+
+## 跨版本与 `compat`
+
+Kimi 每次发版都会重新混淆它的主进程代码，所以任何按符号名读取安装包的检查都撑不过一次更新。`compat` 改为按**结构**定位 Kimi 的目录解析器（引导 IIFE、字符串解码器、含 `skippedModels` 的解析函数），再把本工具生成的目录喂给它，报告四种状态：
+
+| 状态 | 含义 | 退出码 |
+| --- | --- | --- |
+| `verified` | 解析器接受全部模型，0 丢弃 | 0 |
+| `incompatible` | 解析器丢弃了模型，需要处理 | 9 |
+| `unverified` | 认不出这次的混淆结构；集成仍照常工作 | 0 |
+| `unavailable` | 没安装 Kimi 或不在支持平台 | 0 |
+
+`unverified` 不影响可用性：本工具只输出公开的 `api.json` 结构，从不修改 Kimi。它只表示“这一次无法预先验证”。
+
+```sh
+node bin/kimi-work-gateway.mjs compat
+# kimi: 3.2.21 (app.asar e8d6ca63f736…)
+# runtime contracts: native_byok_flag ok, native_profile_store ok, native_catalog_route ok, catalog_parser ok
+# parser: verified — 5 models accepted, 0 skipped
+```
 
 ## 断开
 
@@ -93,7 +123,7 @@ node bin/kimi-work-gateway.mjs prepare
 2. 运行 `remove-dns` 并完成授权。
 3. 停止 `serve`。
 
-只删除内容仍与本工具配置一致的 `/etc/resolver/dev.msh.team`，不删除别人的解析文件，不改全局 DNS、hosts、代理、证书或防火墙。停止 `serve` 后 HTTP 和 DNS 监听一并消失，不安装常驻服务。
+只删除内容仍与本工具配置一致的 `/etc/resolver/dev.msh.team`（macOS），或只删除带本工具标记的那两行（Windows），不删除别人的解析文件或条目，不改全局 DNS、代理、证书或防火墙。停止 `serve` 后 HTTP 监听消失，不安装常驻服务。
 
 ## 作为库使用
 
@@ -116,7 +146,8 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 - 只支持 Chat Completions 与 Responses 两种上游协议，不做跨协议转换。
 - 推理前的模型目录校验以 `listModels()` 的返回为准；上游增删模型后需要重启或重新导入。
 - 首次接入需要一次管理员授权，这是 Kimi 自身的内网检查决定的，不是本工具的选择偏好。
-- 单域名 DNS 只回答 `dev.msh.team`，为合成地址 `10.255.255.254`，不代表接入真实公司内网。
+- 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
+- Windows 分支已实现并有单元测试与 CI 覆盖，但**尚未在真实 Windows + Kimi + UAC 上做端到端验收**；macOS 分支已在本机实测。
 
 ## 开发
 

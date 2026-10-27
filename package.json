@@ -1,6 +1,6 @@
 {
   "name": "kimi-work-gateway",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generic third-party model gateway for Kimi desktop Work, with a standalone CLI and an embeddable core library.",
   "type": "module",
   "main": "./src/index.mjs",
@@ -8,15 +8,15 @@
   "engines": { "bun": ">=1.4.2", "node": ">=20" },
   "scripts": {
     "test": "bun test",
-    "check": "for file in src/*.mjs cli.mjs bin/*.mjs; do node --check \"$file\" || exit; done"
+    "check": "node scripts/check.mjs"
   },
   "files": [
-    "src/", "bin/", "cli.mjs", "README.md", "LICENSE"
+    "src/", "bin/", "scripts/", "cli.mjs", "README.md", "LICENSE"
   ],
   "keywords": ["kimi", "kimi-work", "byok", "gateway", "openai", "responses", "magpie"],
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/wssz527/kimi-work-gateway.git" },
   "homepage": "https://github.com/wssz527/kimi-work-gateway#readme",
   "bugs": { "url": "https://github.com/wssz527/kimi-work-gateway/issues" },
-  "os": ["darwin"]
+  "os": ["darwin", "win32"]
 }
