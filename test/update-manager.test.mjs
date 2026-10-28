@@ -399,7 +399,11 @@ test('install stages a verified archive, switches active atomically and repeats 
     expect(fs.readdirSync(releaseDir).sort()).toEqual(['package', 'release.json']);
     expect(fs.readdirSync(path.join(releaseDir, 'package')).sort()).toEqual(['bin', 'cli.mjs', 'package.json', 'src']);
     expect(fs.readFileSync(active.current.cli, 'utf8')).toContain('"0.6.0"');
-    expect(fs.statSync(path.join(work.updateDir, 'active.json')).mode & 0o777).toBe(0o600);
+    // Windows does not report POSIX permission bits through fs.stat; the mode
+    // passed at creation is the only portable intent there.
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(path.join(work.updateDir, 'active.json')).mode & 0o777).toBe(0o600);
+    }
     expect(fs.readdirSync(path.join(work.updateDir, 'tmp'))).toEqual([]);
     expect(fs.existsSync(path.join(work.updateDir, 'lock'))).toBe(false);
 
