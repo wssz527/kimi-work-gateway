@@ -16,16 +16,31 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 2. 它会对 `dev.msh.team` 做一次内网可用性检查；本工具用一个精确的单域名本地 DNS 回答它，不接管其他域名。
 3. 它按模型 **ID 的命名**选择接口：最后一段以 `kimi-` 开头走 Chat Completions，其余走 Responses。名字和协议对不上时，模型会在导入阶段被静默丢弃。
 
-## 安装与运行
+## 安装与首次使用
 
-要求 Node 20+ 或 Bun 1.4.2+。
+需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。子代理强制选模和思考翻译目前只支持普通 **Kimi 3.2.21** 的已校验内核，Kimi Code 不适用。
+
+### 1. 一条命令安装
+
+macOS 终端：
 
 ```sh
-git clone https://github.com/wssz527/kimi-work-gateway
-cd kimi-work-gateway
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.5.0/kimi-work-gateway-0.5.0.tgz"
 ```
 
-写一份配置（凭证只从环境变量读取，不要写进文件）：
+Windows PowerShell：
+
+```powershell
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.5.0/kimi-work-gateway-0.5.0.tgz"
+```
+
+这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
+
+已有 Magpie 且只需要模型接入与子代理控制时，优先安装 [Magpie 插件](https://github.com/wssz527/magpie-agent-kimi-work-byok#安装)，不必另装独立版。独立版的思考翻译入口不包含在插件内。
+
+### 2. 配置上游与模型
+
+在你自己保存配置的目录创建 `gateway.json`。下面的地址、模型 ID 和能力是示例，需要按实际服务修改；安装不附带 API Key、账号额度或可用的上游服务。凭证只从环境变量读取，不写进 JSON。
 
 ```json
 {
@@ -43,24 +58,52 @@ cd kimi-work-gateway
 }
 ```
 
-```sh
-export KIMI_WORK_UPSTREAM_KEY=...
-export KIMI_WORK_GATEWAY_TOKEN=...
-node bin/kimi-work-gateway.mjs serve --config gateway.json
-```
+**先确认上游协议。** Kimi 要求末段以 `kimi-` 开头的模型 ID 使用 Chat Completions，其余使用 Responses；网关按此转发，不做协议转换，也不把模型别名改写成另一个上游 ID。仅支持 Chat Completions 的服务不能直接承接上述 GLM/DeepSeek 的 Responses 示例。工具、图片输入、推理档位也必须由上游实际支持。
 
-第一次接入还要做一次准备，它会请求系统管理员授权（macOS 写 `/etc/resolver/dev.msh.team`，Windows 只改 hosts 的两行）：
+### 3. 设置环境变量并启动面板
+
+在 `gateway.json` 所在目录运行。macOS：
 
 ```sh
-node bin/kimi-work-gateway.mjs prepare
+export KIMI_WORK_UPSTREAM_KEY='替换为你的上游 API Key'
+export KIMI_WORK_GATEWAY_TOKEN="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+kimi-work-gateway panel --config gateway.json
 ```
 
-然后在 **Kimi 设置 → 其他 → 第三方模型网关** 里填：
+Windows PowerShell：
 
-- **Base URL**：`http://127.0.0.1:3426/v1`
-- **Token**：`copy-token` 复制到剪贴板的那个值
+```powershell
+$secret = Read-Host '上游 API Key' -AsSecureString
+$env:KIMI_WORK_UPSTREAM_KEY = [System.Net.NetworkCredential]::new('', $secret).Password
+Remove-Variable secret
+$env:KIMI_WORK_GATEWAY_TOKEN = node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"
+kimi-work-gateway.cmd panel --config gateway.json
+```
 
-点“测试连接并导入模型”，回到 Work，点输入框旁的模型名即可切换。
+打开终端打印的完整 `panel http://127.0.0.1:3427/#key=…` 链接。**上游 API Key、本地网关 Token、面板链接密钥是三个不同的值**；Kimi 中填写的是本地网关 Token，面板中可点击“复制 Token”。
+
+环境变量只对当前终端及其子进程有效。重新打开终端后需要重新提供凭证；首次生成的网关 Token 应自行妥善保留并在后续启动时复用，重新生成后也要更新 Kimi 保存的 Token。上面的生成命令用于首次接入。
+
+### 4. 首次准备并在 Kimi 导入
+
+保持面板运行，在 **连接与诊断 → 准备原生设置** 中触发一次准备，并完成系统管理员授权（macOS 写 `/etc/resolver/dev.msh.team`，Windows 只改 hosts 的两行）。确认结果为完成，然后在空闲时正常退出并重新打开 Kimi，刷新入口与 DNS 缓存。
+
+也可以在另一个终端执行 `kimi-work-gateway prepare`（PowerShell 使用 `kimi-work-gateway.cmd prepare`）；自定义 DNS 端口时需同时传入匹配的 `--dns-port`。
+
+在 **Kimi 设置 → 其他 → 第三方模型网关** 里填：
+
+- **Base URL**：`http://127.0.0.1:3426/v1`；改了网关端口则使用实际地址。
+- **Token**：面板“复制 Token”写入剪贴板的值。
+
+点“测试连接并导入模型”，回到 Work，点输入框旁的模型名即可切换。基础模型接入到此完成；强制子代理还需[准备并从适配副本启动](#子代理控制可选非官方适配)，翻译还需在[思考翻译](#思考翻译可选)页启用并从网关启动 Kimi。
+
+### 日常运行、升级与移除
+
+- 日常使用需保持 `panel` 或 `serve` 运行；关掉终端会停止模型网关。没有自动开机启动、系统托盘或后台服务，关闭浏览器标签不会停止网关。
+- 不要同时启用独立网关和 Magpie 的 Kimi Work 插件占用同一组默认端口；它们的网关 Token 和状态目录也不同，切换来源后需在 Kimi 重新导入。
+- 更新时先停止旧网关，用新 Release 的完整包地址重跑安装命令，再以原来的配置路径和凭证启动。配置与状态不在 npm 安装目录，包更新会保留它们；发行前后均应检查 Kimi 的版本兼容范围。
+- 卸载前先按[断开](#断开)撤销系统解析，再执行 `npm uninstall --global kimi-work-gateway`（PowerShell 用 `npm.cmd`）。卸载包不会自动撤销解析或删除用户配置。
+- 不分享 API Key、Token、带 `#key=` 的面板链接、账号文件或真实状态目录；给别人的是仓库或 Release 链接，让对方使用自己的上游与凭证。
 
 准备在你的机器上具体做了什么：
 
@@ -76,7 +119,7 @@ Windows 不需要 DNS 服务，因为 Kimi 用 `dns.promises.lookup` 解析该�
 使用同一份配置与环境变量，将 `serve` 换成 `panel`：
 
 ```sh
-node bin/kimi-work-gateway.mjs panel --config gateway.json
+kimi-work-gateway panel --config gateway.json
 # 如需改面板端口：追加 --ui-port 3437
 ```
 
@@ -193,13 +236,13 @@ node bin/kimi-work-gateway.mjs panel --config gateway.json
 
 ```sh
 # 1. 适配本地运行时副本（幂等，不改安装目录）
-node bin/kimi-work-gateway.mjs subagents-prepare
+kimi-work-gateway subagents-prepare
 
 # 2. 查看策略与运行时状态（只读，不写文件）
-node bin/kimi-work-gateway.mjs subagents-status
+kimi-work-gateway subagents-status
 
 # 3. 完全退出 Kimi 后，用适配副本启动
-node bin/kimi-work-gateway.mjs subagents-launch
+kimi-work-gateway subagents-launch
 ```
 
 `subagents-launch` 要求 Kimi 已退出：若检测到 Kimi 仍在运行，会返回 `waiting-kimi-exit`（退出码 0），此时请先退出 Kimi 再重试。
@@ -216,7 +259,7 @@ node bin/kimi-work-gateway.mjs subagents-launch
 
 注意事项：
 
-- 这是**内部、非官方适配**，依赖 Work 内核的具体实现；Kimi 新版本会被直接拒绝。当前允许的规范化内核 SHA-256 为 `ea0a2ec58a26bd0365401e14251b33b7a547dd31bfd423f61699ac362026d1af`。
+- 这是**内部、非官方适配**，依赖 Work 内核的具体实现；Kimi 新版本会被直接拒绝。当前允许的规范化内核 SHA-256 为 `ea0a2ec58a26bd0365401e14251b33b7a547dd31bfd423f61699ac362026d1af`（macOS）或 `3e20b395026c2257d600ac9fda97e27d3ef07fc1f24361a85d890f6efc23778f`（Windows）；相同版本号也必须匹配已核验源码。
 - 退出码：`0` 成功或“需先退出 Kimi”，`3` 失败或冲突（含策略文件损坏、作用域冲突、目标被阻止、来源不可用或心跳过期），`9` Kimi 版本或源码不受支持。
 - `subagents-status` 只读，不会创建策略文件；`subagents-prepare`/`subagents-launch` 在策略文件缺失时会写入 `inherit`，已存在则保留并校验它属于当前 Kimi 作用域。跨作用域和坏策略会明确报告，不会覆盖。
 - `loaded` 表示匹配运行时、存活进程、有效心跳和当前策略版本已确认；需同时检查 `mode`，它可以是 `force`、`inherit` 或 `blocked`。`prepared` 和 `waiting-launch` 不表示强制策略已生效，`starting` 只表示启动请求已发出。
@@ -236,11 +279,11 @@ node bin/kimi-work-gateway.mjs subagents-launch
 `unverified` 与 `unavailable` 不阻止网关运行，但不能作为导入或调用成功的证明。最终以 Kimi 的导入提示与实际调用为准。Windows 会尝试用户安装目录和 Program Files；自定义安装位置可用 `--archive` 指定。
 
 ```sh
-node bin/kimi-work-gateway.mjs compat --config gateway.json
-node bin/kimi-work-gateway.mjs compat --archive /path/to/app.asar --config gateway.json
+kimi-work-gateway compat --config gateway.json
+kimi-work-gateway compat --archive /path/to/app.asar --config gateway.json
 
 # 只检查 5 个内置样例：
-node bin/kimi-work-gateway.mjs compat
+kimi-work-gateway compat
 # catalog: sample-models (5 models)
 # parser: verified — 5 models accepted, 0 skipped
 ```
@@ -283,7 +326,11 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 
 ## 开发
 
+以下命令用于源码仓库；普通安装用户不需要执行测试或安装 Bun。
+
 ```sh
+git clone https://github.com/wssz527/kimi-work-gateway
+cd kimi-work-gateway
 bun test        # Bun 1.4.2 / 1.4.4；1.3.x 不在支持范围
 bun run check   # 语法检查
 bun scripts/verify-package.mjs  # 打包、解包并在包内重跑测试和检查
