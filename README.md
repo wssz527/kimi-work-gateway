@@ -25,13 +25,13 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 macOS 终端：
 
 ```sh
-npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.5.0/kimi-work-gateway-0.5.0.tgz"
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.0/kimi-work-gateway-0.6.0.tgz"
 ```
 
 Windows PowerShell：
 
 ```powershell
-npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.5.0/kimi-work-gateway-0.5.0.tgz"
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.0/kimi-work-gateway-0.6.0.tgz"
 ```
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
@@ -234,7 +234,7 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 默认情况下 Work 里的子代理沿用主模型。如果希望子代理固定走另一个模型，本工具提供一条**内部、非官方**的适配路径：
 
 - Kimi 从**本地运行时副本**加载适配代码：`subagents-launch` 为本次 Kimi 进程设置 `DAIMON_BUNDLE_DIR`，指向状态目录里的副本。`serve` 负责保存策略和转发请求，**不修改 Kimi 安装目录、`app.asar`、可执行文件或签名**。
-- 只支持 **Kimi 3.2.21** 且内核源码哈希精确匹配的那一份；版本或哈希不符时 `subagents-prepare` 直接拒绝（退出码 9），不会尝试猜测。
+- 按**实际结构接点**判断：配置读取、子代理创建、运行入口和模型档案服务都要唯一匹配；缺失或有多个候选时 `subagents-prepare` 明确拒绝（退出码 9），不会猜测或强行改写。版本号与内核摘要只用于展示和副本完整性校验。
 - 主模型仍由 Work 菜单选择；这里只影响子代理。
 
 配置里加一段 `subagents`（模型必须已在本工具的 `models` 中声明且带 `tools`；要写 `effort` 时该模型还须声明 `reasoningEfforts`）：
@@ -340,7 +340,7 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 - 首次接入需要管理员授权（macOS resolver / Windows hosts）。准备只有在操作完成且验证成功后才记为 `done`；裁决缺失会记为失败。
 - Windows prepare 可使用已存在的手工同值条目，撤销时保留该条目；只删除标记与内容完整匹配的归属条目对。BOM、原换行和无末尾换行的内容保留；不支持的编码拒绝改写。
 - 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
-- 子代理控制是内部、非官方适配，仅支持 Kimi 3.2.21 的指定源哈希，其他版本直接拒绝；不能保证跨版本可用。
+- 子代理控制是内部、非官方适配，按实际结构判断兼容性；结构接点缺失或歧义时拒绝准备，不会猜测或强行改写。
 - Windows 真机已验证 CLI、Node/HTTP 流程及临时 hosts 文件的实际 PowerShell 编辑，并在官方普通 Kimi 3.2.21 的隔离用户目录中验证私有 CDP 管道与 Work 渲染器挂载。**真实 UAC、真实 hosts 修改与登录后的完整 Work 桌面流程仍未联合验收**；分层结果以发行说明为准。
 - 原生内核回归与翻译界面测试使用隔离目录、合成文本及本地模拟上游，覆盖模型绑定、恢复、坏策略和译文生命周期。它们不产生付费推理，也不能代替登录桌面后的整条调用链验证。
 
