@@ -374,7 +374,7 @@ test('a request that never answers times out instead of hanging', async () => {
 test('install stages a verified archive, switches active atomically and repeats idempotently', async () => {
   const work = workspace();
   try {
-    const base = basePackage(work, '0.5.0');
+    basePackage(work, '0.5.0');
     const { asset } = releaseFor(work);
     const release = releaseJSON({ asset });
     const updater = updaterFor(work, { release, asset });
@@ -407,7 +407,6 @@ test('install stages a verified archive, switches active atomically and repeats 
     expect(again).toMatchObject({ state: 'staged', pendingVersion: '0.6.0' });
     expect(readActive(work).generation).toBe(1);
     expect(fs.readdirSync(path.join(work.updateDir, 'releases'))).toEqual([key]);
-    expect(base).toBe(work.file('base', 'package'));
   } finally { work.cleanup(); }
 });
 
@@ -501,7 +500,6 @@ test('malformed archives are rejected before extraction and never become active'
   const work = workspace();
   try {
     basePackage(work);
-    const valid = packageEntries();
     const cases = [
       ['traversal', packageEntries({ extra: [{ name: 'package/../evil.mjs', content: 'x' }] })],
       ['absolute', packageEntries({ extra: [{ name: '/etc/evil.mjs', content: 'x' }] })],
@@ -544,7 +542,6 @@ test('malformed archives are rejected before extraction and never become active'
       expect(fs.existsSync(path.join(work.updateDir, 'active.json'))).toBe(false);
       expect(fs.existsSync(path.join(work.updateDir, 'releases'))).toBe(false);
     }
-    expect(valid.length).toBeGreaterThan(0);
   } finally { work.cleanup(); }
 });
 

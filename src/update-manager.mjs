@@ -1029,12 +1029,13 @@ export class GatewayUpdater {
         try { await response.body?.cancel?.(); } catch {}
         throw httpFailure(response.status);
       }
-      // A metadata document must be JSON; an HTML login or error page that
-      // happens to answer 200 is a failed update, not an empty release.
+      // GitHub answers JSON. Reject an HTML login or error page that happens to
+      // answer 200, but do not require the header: a plain text answer is
+      // parsed below and rejected there if it is not JSON.
       if (kind === 'api') {
         let type = '';
         try { type = (response.headers.get('content-type') || '').toLowerCase(); } catch {}
-        if (type && !type.includes('json')) {
+        if (type.includes('text/html') || type.includes('application/xhtml')) {
           try { await response.body?.cancel?.(); } catch {}
           throw updateError('update_release_invalid');
         }
