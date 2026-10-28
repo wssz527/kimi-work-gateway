@@ -92,17 +92,46 @@ node bin/kimi-work-gateway.mjs panel --config gateway.json
 
 `panel` 必须使用实际 JSON 文件，不接受 `--config -`。保存会保留原配置的未知字段；多个页面同时保存会提示版本冲突。手动在外部更改基础配置仍需重启。退出命令会关闭两个监听并按归属恢复继承。
 
-控制 API 使用版本 1 状态，保留原接口并增加模型与连接设置：
+控制 API 使用版本 1 状态，保留原接口并增加翻译设置：
 
 | 接口 | 请求与响应 |
 | --- | --- |
-| `GET /api/state` | 状态、模型、子代理、连接的运行/保存值、进程内请求统计与诊断摘要；不含密钥值 |
+| `GET /api/state` | 状态、模型、子代理、连接、翻译设置与真实会话状态、请求统计及诊断摘要；不含密钥值 |
 | `POST /api/models` | `{revision, models}`，完整模型目录；成功返回 `{ok:true,state}` 并立即应用 |
 | `POST /api/connection` | `{revision, upstream:{baseURL,apiKeyEnv}, tokenEnv, port, dns:{enabled,port}}`；成功返回 `{ok:true,state}`，连接等重启后应用 |
 | `POST /api/subagents` | `{revision,mode,model?,effort?}`；成功返回 `{ok:true,state}` |
-| `POST /api/actions` | `{id,at,action}`；202 返回 `{ok:true,operation}`，轮询状态确认结果；新增 `check-upstream`、`check-compat` |
+| `POST /api/translation` | `{revision,...translation}`，完整翻译设置；成功返回 `{ok:true,state}`，已有宿主异步应用并回报状态 |
+| `POST /api/actions` | `{id,at,action}`；202 返回 `{ok:true,operation}`，轮询状态确认结果；支持 `check-upstream`、`check-compat`、`check-translation`、`launch-translated-kimi` |
 
 操作请求五分钟内有效，先持久记录再执行；同一次操作的重试须复用 `id` 和 `at`，重复请求返回原结果，中断后不重放。配置保存须带当前 `revision`，不能在网络结果未知时盲目重试。错误统一返回 `{error:{code,message}}`；已落盘但运行策略未更新时另带 `saved:true`。API 使用面板专用 Bearer 密钥、精确 Host/Origin 检查和 JSON 请求体，推理端点仍拒绝网页来源。
+
+## 思考翻译（可选）
+
+在面板的 **思考翻译** 页启用、选择服务和目标语言，保存后点击 **从网关启动 Kimi**。先正常退出已运行的 Kimi；网关不会结束现有进程。启用翻译后，面板原来的“启动 Kimi”也使用相同宿主，强制子代理选择继续使用已验证的运行时副本，需先准备该副本。
+
+支持 Bing、Google 和自定义 Chat Completions，可选中文、英语、日语、韩语、西班牙语、法语、德语、俄语。Bing/Google 使用其公开翻译入口，可用性由服务方决定。思考文本会发送到所选翻译服务；代码块、行内代码和链接保持原文。长文本分段处理，超过边界或翻译失败会显示原因并保留原文，不用原文冒充成功。
+
+自定义服务填写完整 Chat Completions URL，例如 `https://your-upstream.example/v1/chat/completions`，可选模型 ID。API Key 只从宿主的环境变量读取，默认变量名 `KIMI_WORK_TRANSLATION_API_KEY`；修改环境变量后需重新启动翻译会话，页面只显示变量是否存在，不接收密钥值。端点须使用 HTTPS，本机可用 HTTP，不允许嵌入凭证、查询参数或片段。
+
+配置文件中的可选字段如下，也可直接通过面板填写：
+
+```json
+{
+  "translation": {
+    "enabled": true,
+    "provider": "bing",
+    "targetLanguage": "zh",
+    "view": "translated",
+    "customEndpoint": "",
+    "customModel": "",
+    "apiKeyEnv": "KIMI_WORK_TRANSLATION_API_KEY"
+  }
+}
+```
+
+翻译入口由 `panel` 提供；单独的 `serve` 或 `subagents-launch` 不会启动翻译宿主。设置保存与实际注入分别显示，只有 Work 渲染器确认后才显示生效。Kimi 思考区域提供 **译文 / 原文 / 重译**，折叠随原思考区域同步；停用设置后恢复原文。关闭面板标签不影响翻译；退出网关后已启动的会话宿主继续服务该 Kimi，重启同一状态目录的面板可继续管理。Kimi 退出后宿主自动结束。
+
+目前翻译仅适配 **普通 Kimi 3.2.21 的 Work 页面**，版本不符会拒绝启动；不适用于 Kimi Code。它通过随启动建立的私有 CDP pipe 注入，不暴露调试 TCP 端口、不提供任意脚本 HTTP 接口、不修改安装包或签名。若仍从任务 3 的旧翻译启动器进入，会提示旧实例存在；请退出后使用网关的新入口。原文和译文仅在页面有界内存中缓存，不写入 localStorage 或网关状态文件。
 
 ## 模型声明
 
@@ -249,8 +278,8 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 - Windows prepare 可使用已存在的手工同值条目，撤销时保留该条目；只删除标记与内容完整匹配的归属条目对。BOM、原换行和无末尾换行的内容保留；不支持的编码拒绝改写。
 - 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
 - 子代理控制是内部、非官方适配，仅支持 Kimi 3.2.21 的指定源哈希，其他版本直接拒绝；不能保证跨版本可用。
-- **尚未在真实 Windows + Kimi + UAC 上做端到端验收。** Windows 专用用例会在临时文件上实际执行 PowerShell；macOS 无 PowerShell 时跳过这些用例，不能将其记为已通过。Windows 上的子代理控制同样尚未在真机验收，暂按“未验证”对待。
-- 本轮原生回归使用真实 Work 内核与隔离数据，覆盖模型绑定、恢复和坏策略；没有重启正在使用的 Kimi。经 `subagents-launch` 启动完整桌面后再操作 Work 的整条链路仍待单独验收，不能以直接加载内核替代这项证据。
+- Windows 真机已验证 CLI、Node/HTTP 流程及临时 hosts 文件的实际 PowerShell 编辑，并在官方普通 Kimi 3.2.21 的隔离用户目录中验证私有 CDP 管道与 Work 渲染器挂载。**真实 UAC、真实 hosts 修改与登录后的完整 Work 桌面流程仍未联合验收**；分层结果以发行说明为准。
+- 原生内核回归与翻译界面测试使用隔离目录、合成文本及本地模拟上游，覆盖模型绑定、恢复、坏策略和译文生命周期。它们不产生付费推理，也不能代替登录桌面后的整条调用链验证。
 
 ## 开发
 

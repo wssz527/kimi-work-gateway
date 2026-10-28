@@ -3,6 +3,7 @@ const API = {
   models: '/api/models',
   connection: '/api/connection',
   subagents: '/api/subagents',
+  translation: '/api/translation',
   actions: '/api/actions',
 };
 
@@ -19,6 +20,7 @@ const VIEW_COPY = {
   overview: { title: '概览', lede: '网关、配置与子代理目标此刻的真实状态。' },
   models: { title: '模型管理', lede: '目录决定可选模型与它们的真实能力；保存会提交整个目录。' },
   subagents: { title: '子代理', lede: '选择本机子代理实际使用的模型与思考档位。' },
+  translation: { title: '思考翻译', lede: '把 Kimi 的思考过程翻译成所选语言；保存只写配置，注入成功以运行时为准。' },
   connection: { title: '连接与诊断', lede: '上游地址、端口与环境变量名；检查只诊断连通性，不代表推理成功。' },
 };
 
@@ -30,6 +32,8 @@ const ACTION_LABEL = {
   'copy-token': '复制 Token',
   'check-upstream': '上游检查',
   'check-compat': '兼容性检查',
+  'launch-translated-kimi': '从网关启动 Kimi',
+  'check-translation': '检查翻译状态',
 };
 
 const ACTION_STATE = {
@@ -75,9 +79,24 @@ const DIAG_REASON = {
   probe_failed: '兼容检查未能执行。',
 };
 
+const TRANSLATION_STATE = {
+  disabled: { tone: 'neutral', word: '已关闭', note: '翻译在设置中关闭；Kimi 的思考保持原文。' },
+  'not-started': { tone: 'neutral', word: '未启动', note: '还没有通过网关启动带翻译的 Kimi。' },
+  starting: { tone: 'warn', word: '正在启动', note: '宿主进程正在准备带翻译的 Kimi。' },
+  attaching: { tone: 'warn', word: '正在接入', note: '宿主进程正在把翻译引擎接入 Kimi 窗口。' },
+  active: { tone: 'ok', word: '已注入', note: 'Kimi 已确认翻译引擎在运行。' },
+  inactive: { tone: 'warn', word: '未生效', note: '翻译已配置，但当前 Kimi 窗口没有运行翻译引擎。' },
+  'waiting-kimi-exit': { tone: 'warn', word: '等待 Kimi 退出', note: 'Kimi 仍在运行。请正常退出 Kimi，再从网关启动；本面板不会强制结束它。' },
+  incompatible: { tone: 'bad', word: '不兼容', note: '当前 Kimi 版本或界面不支持注入翻译。' },
+  failed: { tone: 'bad', word: '失败', note: '翻译注入未能完成，请查看原因后重试。' },
+  stale: { tone: 'warn', word: '状态过期', note: '上一次注入的确认已过期，需要重新检查或重新启动。' },
+  'pending-settings': { tone: 'warn', word: '正在应用', note: '翻译设置已保存，等待现有会话确认；无需重启推理网关。' },
+  'legacy-running': { tone: 'warn', word: '旧版占用', note: '检测到任务 3 的旧注入仍在运行，未重复挂载；请正常退出 Kimi 后从网关启动。' },
+};
+
 const ERROR_HINT = {
   configuration_conflict: '配置在别处被修改，已刷新状态；你的编辑仍然保留，请确认后重新保存。',
-  configuration_changed: '配置已在外部修改，模型与子代理保存已禁用，请重启面板。',
+  configuration_changed: '配置已在外部修改，模型、子代理与翻译保存已禁用，请重启面板。',
   configuration_unavailable: '无法读取配置文件，请检查文件后重启面板。',
   configuration_apply_failed: '目录已保存，但运行策略未能更新，请检查状态后重启。',
   subagent_model_in_use: '当前子代理仍在使用此模型或档位。请先到「子代理」更改目标，再修改模型能力。',
@@ -102,6 +121,16 @@ const ERROR_HINT = {
   json_required: '请求格式不被接受。',
   request_too_large: '请求过大，请减少一次提交的模型数量。',
   invalid_panel_action: '操作请求格式不被接受，请刷新后重试。',
+  translation_unavailable: '面板服务未提供翻译状态，无法保存翻译设置。',
+  invalid_translation_config: '翻译设置无效：请检查服务、目标语言与自定义服务字段。',
+  invalid_translation_endpoint: '自定义服务地址需使用 HTTPS（本机回环可用 HTTP），且不能包含账号、查询参数或片段。',
+  invalid_translation_api_key_env: 'API Key 变量名只能使用大写字母、数字与下划线，且不能以数字开头。',
+  translation_not_enabled: '请先保存启用翻译的设置，再从网关启动 Kimi。',
+  translation_unsaved_draft: '翻译设置有未保存的修改，请先保存再启动。',
+  translation_config_unavailable: '翻译配置当前不可用，无法启动。',
+  translation_kimi_running: 'Kimi 已在运行。请正常退出 Kimi 后从网关启动；本面板不会强制结束它。',
+  translation_runtime_unavailable: '翻译运行时不可用，请检查本机 Kimi 副本。',
+  translation_incompatible: '当前 Kimi 版本或界面不支持注入翻译。',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -135,6 +164,7 @@ const dom = {
   navOverview: $('nav-overview'),
   navModels: $('nav-models'),
   navSubagents: $('nav-subagents'),
+  navTranslation: $('nav-translation'),
   navConnection: $('nav-connection'),
   navModelCount: $('nav-model-count'),
 
@@ -255,6 +285,35 @@ const dom = {
   diagCompatState: $('diag-compat-state'),
   diagCompatMeta: $('diag-compat-meta'),
 
+  trUnavailable: $('tr-unavailable'),
+  trForm: $('tr-form'),
+  trEnabled: $('tr-enabled'),
+  trProvider: $('tr-provider'),
+  trProviderHint: $('tr-provider-hint'),
+  trTarget: $('tr-target'),
+  trView: $('tr-view'),
+  trCustom: $('tr-custom'),
+  trEndpoint: $('tr-endpoint'),
+  trModel: $('tr-model'),
+  trKeyEnv: $('tr-keyenv'),
+  trKeyState: $('tr-key-state'),
+  trEgress: $('tr-egress'),
+  trErrors: $('tr-errors'),
+  trDraft: $('tr-draft'),
+  trReset: $('tr-reset'),
+  trSave: $('tr-save'),
+  trRuntimeDot: $('tr-runtime-dot'),
+  trRuntime: $('tr-runtime'),
+  trVersion: $('tr-version'),
+  trPid: $('tr-pid'),
+  trEnvDot: $('tr-env-dot'),
+  trEnv: $('tr-env'),
+  trVerdictDot: $('tr-verdict-dot'),
+  trVerdictWord: $('tr-verdict-word'),
+  trVerdictNote: $('tr-verdict-note'),
+  trLaunch: $('tr-launch'),
+  trCheck: $('tr-check'),
+
   toast: $('toast'),
 };
 
@@ -272,6 +331,8 @@ const state = {
   modelsSaving: false,
   subagentSaving: false,
   connSaving: false,
+  translation: { base: null, dirty: false },
+  translationSaving: false,
   reachable: null,
   pendingAction: null,
   pendingOpId: null,
@@ -423,6 +484,7 @@ function setView(view, { persist = true } = {}) {
   }
   if (view === 'models') renderModels();
   if (view === 'subagents') renderSubagents();
+  if (view === 'translation') renderTranslation();
   if (view === 'connection') renderConnection();
 }
 
@@ -716,6 +778,148 @@ function fillConnectionForm() {
   state.conn.dirty = false;
 }
 
+/* ---------- translation helpers ---------- */
+
+const TRANSLATION_DEFAULTS = {
+  enabled: false,
+  provider: 'bing',
+  targetLanguage: 'zh',
+  view: 'translated',
+  customEndpoint: '',
+  customModel: '',
+  apiKeyEnv: 'KIMI_WORK_TRANSLATION_API_KEY',
+};
+const TRANSLATION_PROVIDERS = ['bing', 'google', 'custom'];
+const TRANSLATION_LANGUAGES = ['zh', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'ru'];
+const TRANSLATION_VIEWS = ['translated', 'original'];
+
+function translationPayload(data) {
+  return (data && data.translation) || null;
+}
+
+function translationAvailable(data) {
+  return Boolean(translationPayload(data));
+}
+
+function savedTranslation(data) {
+  const payload = translationPayload(data);
+  const configured = (payload && payload.configured) || {};
+  return {
+    enabled: configured.enabled === true,
+    provider: TRANSLATION_PROVIDERS.includes(configured.provider) ? configured.provider : TRANSLATION_DEFAULTS.provider,
+    targetLanguage: TRANSLATION_LANGUAGES.includes(configured.targetLanguage)
+      ? configured.targetLanguage
+      : TRANSLATION_DEFAULTS.targetLanguage,
+    view: TRANSLATION_VIEWS.includes(configured.view) ? configured.view : TRANSLATION_DEFAULTS.view,
+    customEndpoint: typeof configured.customEndpoint === 'string' ? configured.customEndpoint : '',
+    customModel: typeof configured.customModel === 'string' ? configured.customModel : '',
+    apiKeyEnv: typeof configured.apiKeyEnv === 'string' && configured.apiKeyEnv
+      ? configured.apiKeyEnv
+      : TRANSLATION_DEFAULTS.apiKeyEnv,
+  };
+}
+
+function translationFormValues() {
+  return {
+    enabled: Boolean(dom.trEnabled && dom.trEnabled.checked),
+    provider: dom.trProvider ? dom.trProvider.value : TRANSLATION_DEFAULTS.provider,
+    targetLanguage: dom.trTarget ? dom.trTarget.value : TRANSLATION_DEFAULTS.targetLanguage,
+    view: dom.trView ? dom.trView.value : TRANSLATION_DEFAULTS.view,
+    customEndpoint: dom.trEndpoint ? dom.trEndpoint.value : '',
+    customModel: dom.trModel ? dom.trModel.value : '',
+    apiKeyEnv: dom.trKeyEnv ? dom.trKeyEnv.value : '',
+  };
+}
+
+function translationKey(value) {
+  if (!value) return '';
+  return JSON.stringify([
+    Boolean(value.enabled),
+    value.provider,
+    value.targetLanguage,
+    value.view,
+    String(value.customEndpoint || '').trim(),
+    String(value.customModel || '').trim(),
+    String(value.apiKeyEnv || '').trim(),
+  ]);
+}
+
+function normalizeTranslationEndpoint(value) {
+  const text = String(value || '').trim();
+  if (!text) return { error: '自定义服务需要填写完整的 Chat Completions 地址。' };
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    return { error: '自定义服务地址不是合法的 URL。' };
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) return { error: '自定义服务地址必须使用 HTTPS（本机回环可用 HTTP）。' };
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(url.href)) return { error: '自定义服务地址不能包含账号或密码。' };
+  if (url.search || url.hash) return { error: '自定义服务地址不能包含查询参数或片段。' };
+  if (url.protocol === 'http:' && !LOOPBACK.has(url.hostname)) return { error: '非本机地址必须使用 HTTPS。' };
+  return { value: url.href };
+}
+
+/* 与保存按钮共用同一套规则，避免界面说可用而服务端拒绝。 */
+function buildTranslation(input) {
+  const errors = [];
+  const provider = TRANSLATION_PROVIDERS.includes(input.provider) ? input.provider : TRANSLATION_DEFAULTS.provider;
+  const targetLanguage = TRANSLATION_LANGUAGES.includes(input.targetLanguage)
+    ? input.targetLanguage
+    : TRANSLATION_DEFAULTS.targetLanguage;
+  const view = TRANSLATION_VIEWS.includes(input.view) ? input.view : TRANSLATION_DEFAULTS.view;
+
+  let customEndpoint = '';
+  const customModel = String(input.customModel || '').trim();
+  let apiKeyEnv = String(input.apiKeyEnv || '').trim();
+  if (customModel.length > 2048 || /[\x00-\x1f\x7f]/.test(customModel)) errors.push('模型名称过长或包含控制字符。');
+
+  if (provider === 'custom') {
+    const endpoint = normalizeTranslationEndpoint(input.customEndpoint);
+    if (endpoint.error) errors.push(endpoint.error);
+    else customEndpoint = endpoint.value;
+    if (apiKeyEnv && (!ENV_PATTERN.test(apiKeyEnv) || apiKeyEnv.length > 128)) {
+      errors.push('API Key 变量名只能使用大写字母、数字与下划线，最长 128 字符，且不能以数字开头。');
+    }
+  } else {
+    const endpoint = normalizeTranslationEndpoint(input.customEndpoint);
+    if (!endpoint.error) customEndpoint = endpoint.value;
+    if (apiKeyEnv && (!ENV_PATTERN.test(apiKeyEnv) || apiKeyEnv.length > 128)) apiKeyEnv = '';
+  }
+  if (!apiKeyEnv) apiKeyEnv = TRANSLATION_DEFAULTS.apiKeyEnv;
+
+  return {
+    errors,
+    value: {
+      enabled: input.enabled === true,
+      provider,
+      targetLanguage,
+      view,
+      customEndpoint,
+      customModel,
+      apiKeyEnv,
+    },
+  };
+}
+
+function fillTranslationForm() {
+  const values = savedTranslation(state.data);
+  if (dom.trEnabled) dom.trEnabled.checked = values.enabled;
+  if (dom.trProvider) dom.trProvider.value = values.provider;
+  if (dom.trTarget) dom.trTarget.value = values.targetLanguage;
+  if (dom.trView) dom.trView.value = values.view;
+  if (dom.trEndpoint) dom.trEndpoint.value = values.customEndpoint;
+  if (dom.trModel) dom.trModel.value = values.customModel;
+  if (dom.trKeyEnv) dom.trKeyEnv.value = values.apiKeyEnv;
+  state.translation.base = translationKey(values);
+  state.translation.dirty = false;
+}
+
+function translationDirty() {
+  if (!translationAvailable(state.data)) return false;
+  return translationKey(translationFormValues()) !== state.translation.base;
+}
+
 /* ---------- target draft ---------- */
 
 function savedTarget(data) {
@@ -833,7 +1037,7 @@ function renderShell(data) {
   const config = (data && data.configuration) || {};
   setHidden(dom.restartBanner, config.state !== 'changed');
   if (config.state === 'changed') {
-    setText(dom.restartBannerText, '连接配置已修改，当前进程仍在使用启动时的设置。模型与子代理保存已禁用，重启面板后生效。');
+    setText(dom.restartBannerText, '连接配置已修改，当前进程仍在使用启动时的设置。模型、子代理与翻译保存已禁用，重启面板后生效。');
   }
   setText(dom.navModelCount, fmtCount((data.models || []).length));
 }
@@ -946,7 +1150,8 @@ function isInFlight(op) {
 function operationNote(op) {
   const reason = op && typeof op.reason === 'string' && op.reason ? reasonText(op.reason) : '';
   if (op && op.state === 'waiting-kimi-exit') {
-    return 'Kimi 已在运行。请正常退出 Kimi，再点一次「启动 Kimi」；本面板不会强制结束它。';
+    const launch = op.action === 'launch-translated-kimi' ? '「从网关启动 Kimi」' : '「启动 Kimi」';
+    return 'Kimi 已在运行。请正常退出 Kimi，再点一次' + launch + '；本面板不会强制结束它。';
   }
   return reason;
 }
@@ -971,13 +1176,21 @@ function renderOperation(data) {
 function renderActions(data) {
   if (!actionButtons.length) return;
   const running = isInFlight(data && data.operation);
-  const busy = running || state.modelsSaving || state.subagentSaving || state.connSaving;
+  const busy = running || state.modelsSaving || state.subagentSaving || state.connSaving || state.translationSaving;
   const ready = configReady(data);
+  const translationDirty = translationAvailable(data) ? state.translation.dirty : false;
+  const launch = translationLaunchState(data, { dirty: translationDirty });
   for (const button of actionButtons) {
     const action = button.dataset.action;
     const needsReady = action === 'prepare-runtime' || action === 'launch-kimi';
+    const isTranslation = action === 'launch-translated-kimi' || action === 'check-translation';
     const pending = state.pendingAction === action;
-    button.disabled = busy || (needsReady && !ready);
+    const translationBlocked = action === 'launch-translated-kimi'
+      ? !launch.ready
+      : action === 'check-translation'
+        ? !translationAvailable(data) || !ready
+        : false;
+    button.disabled = busy || (needsReady && !ready) || (isTranslation && translationBlocked);
     button.classList.toggle('is-busy', pending);
     button.setAttribute('aria-busy', pending ? 'true' : 'false');
   }
@@ -1635,6 +1848,179 @@ function renderDiagnostics(data) {
   }
 }
 
+/* ---------- render: translation ---------- */
+
+const TRANSLATION_REASON = {
+  'kimi-running': 'Kimi 已在运行，需要正常退出后再从网关启动。',
+  'kimi-exited': 'Kimi 已退出，翻译引擎随之停止。',
+  'renderer-missing': '没有找到可注入的 Kimi 渲染窗口。',
+  'version-unsupported': '当前 Kimi 版本不支持翻译注入。',
+  'engine-inactive': 'Kimi 窗口已连接，但翻译引擎没有运行。',
+  'legacy-engine': '检测到旧版翻译注入，未重复挂载。',
+  'settings-pending': '设置已保存，等待下次从网关启动时采用。',
+  'launch-failed': '带翻译的 Kimi 启动失败。',
+};
+
+function translationReason(code) {
+  if (typeof code !== 'string' || !code) return '';
+  return TRANSLATION_REASON[code] || code;
+}
+
+function translationRuntime(data) {
+  return (data && data.translation && data.translation.runtime) || {};
+}
+
+function translationLaunchState(data, { dirty = false } = {}) {
+  const problems = [];
+  if (!data) return { problems: ['尚未读取状态。'], ready: false };
+  if (!translationAvailable(data)) problems.push('面板服务未提供翻译状态，暂时不能启动。');
+  if (!configReady(data)) problems.push('连接配置不是就绪状态，请先重启面板。');
+  if (!savedTranslation(data).enabled) problems.push('翻译尚未启用并保存，不能启动带翻译的 Kimi。');
+  if (dirty) problems.push('翻译设置有未保存的修改，请先保存。');
+  return { problems, ready: problems.length === 0 };
+}
+
+function evaluateTranslation(data, { dirty = false } = {}) {
+  if (!data) return { tone: 'neutral', word: '读取中', note: '' };
+  if (!translationAvailable(data)) {
+    return { tone: 'neutral', word: '不可用', note: '面板服务未提供翻译状态；其余功能不受影响。' };
+  }
+
+  const saved = savedTranslation(data);
+  const runtime = translationRuntime(data);
+  const info = TRANSLATION_STATE[runtime.state] || {
+    tone: 'neutral',
+    word: typeof runtime.state === 'string' && runtime.state ? runtime.state : '未知',
+    note: '',
+  };
+  const reason = translationReason(runtime.reason);
+
+  if (!saved.enabled) {
+    if (['active', 'pending-settings', 'starting', 'attaching'].includes(runtime.state)) {
+      return { tone: 'warn', word: '等待停用确认', note: '关闭设置已保存，等待现有会话恢复原文；请以运行时确认结果为准。' };
+    }
+    if (runtime.state === 'legacy-running') return { tone: info.tone, word: info.word, note: info.note };
+    if (['failed', 'stale'].includes(runtime.state)) {
+      return { tone: 'warn', word: '停用未确认', note: reason || '无法确认现有会话是否已停用，请检查状态。' };
+    }
+    return { tone: 'neutral', word: '已关闭', note: '启用后保存设置，再从网关启动 Kimi。' };
+  }
+
+  if (dirty) {
+    return { tone: 'warn', word: '有未保存修改', note: '保存后由会话应用新设置；当前运行状态未改变。' };
+  }
+
+  if (runtime.state === 'active') {
+    return { tone: 'ok', word: '已注入', note: 'Kimi 已确认翻译引擎在运行。' };
+  }
+
+  if (runtime.state === 'disabled') {
+    return { tone: 'neutral', word: '待启动', note: '翻译已启用并保存；从网关启动 Kimi 后才会注入。' };
+  }
+
+  return { tone: info.tone, word: info.word, note: reason || info.note };
+}
+
+function setTranslationControlsDisabled(disabled) {
+  const fields = [dom.trEnabled, dom.trProvider, dom.trTarget, dom.trView, dom.trEndpoint, dom.trModel, dom.trKeyEnv];
+  fields.forEach((field) => {
+    if (field) field.disabled = disabled;
+  });
+}
+
+function renderTranslation() {
+  const data = state.data;
+  if (!data) return;
+
+  const available = translationAvailable(data);
+  setHidden(dom.trUnavailable, available);
+  setTranslationControlsDisabled(!available || state.translationSaving);
+
+  /* 表单只在首次填充；之后由输入事件维护草稿，轮询渲染绝不回写用户正在编辑的字段。 */
+  if (available && state.translation.base === null) fillTranslationForm();
+  const dirty = translationDirty();
+  state.translation.dirty = dirty;
+
+  const provider = dom.trProvider ? dom.trProvider.value : savedTranslation(data).provider;
+  setHidden(dom.trCustom, provider !== 'custom');
+  const serviceName = provider === 'custom' ? '你填写的 Chat 服务' : provider === 'google' ? 'Google 翻译' : 'Bing 翻译';
+  if (dom.trProviderHint) {
+    setText(dom.trProviderHint, provider === 'custom'
+      ? '由你提供的 Chat Completions 服务翻译；只填写地址、模型和变量名。'
+      : '公共翻译服务，无需填写凭证；译文质量由该服务决定。');
+  }
+  if (dom.trEgress) {
+    setText(dom.trEgress, '启用后，被翻译的思考文本会发送到' + serviceName
+      + '；代码块、行内代码与链接会保留原文。翻译与子代理目标可以同时启用，互不影响。');
+  }
+
+  const built = buildTranslation(translationFormValues());
+  if (dom.trErrors) {
+    setHidden(dom.trErrors, built.errors.length === 0);
+    dom.trErrors.replaceChildren(...built.errors.map((message) => {
+      const p = document.createElement('p');
+      p.textContent = message;
+      return p;
+    }));
+  }
+
+  const payload = translationPayload(data) || {};
+  const environment = payload.environment || {};
+  const keyKnown = built.value.apiKeyEnv === savedTranslation(data).apiKeyEnv;
+  const keySet = keyKnown && environment.keySet === true;
+  const custom = provider === 'custom';
+  setDot(dom.trEnvDot, custom && keySet ? 'ok' : 'neutral');
+  setText(dom.trEnv, custom ? (keyKnown ? (keySet ? '环境变量已设置' : '未设置，可免鉴权') : '保存后检查变量') : '公共翻译服务，无需凭证');
+  if (dom.trKeyState) {
+    dom.trKeyState.dataset.tone = keySet ? 'ok' : 'neutral';
+    setText(dom.trKeyState, !keyKnown ? '变量名有未保存的修改；保存后显示启动环境中的状态。' : keySet
+      ? '已读取到该环境变量；页面不会显示它的值。'
+      : '未读取到该环境变量，将不携带鉴权；服务需要 Key 时，请设置变量并重新启动翻译会话。');
+  }
+
+  const runtime = translationRuntime(data);
+  const info = TRANSLATION_STATE[runtime.state] || {
+    tone: 'neutral',
+    word: typeof runtime.state === 'string' && runtime.state ? runtime.state : '未知',
+    note: '',
+  };
+  setDot(dom.trRuntimeDot, info.tone);
+  setText(dom.trRuntime, info.word);
+  setText(dom.trVersion, typeof runtime.version === 'string' && runtime.version ? runtime.version : '—');
+  setText(dom.trPid, typeof runtime.pid === 'number' ? String(runtime.pid) : '—');
+
+  const verdict = evaluateTranslation(data, { dirty });
+  setDot(dom.trVerdictDot, verdict.tone);
+  setText(dom.trVerdictWord, verdict.word);
+  setText(dom.trVerdictNote, verdict.note);
+
+  const launch = translationLaunchState(data, { dirty });
+  if (dom.trLaunch) dom.trLaunch.disabled = !launch.ready || state.translationSaving || isInFlight(data.operation);
+  /* 待重启的连接意味着运行时仍按启动时的配置工作，此时检查结果不可信，一并禁用。 */
+  if (dom.trCheck) {
+    dom.trCheck.disabled = !available || !configReady(data) || state.translationSaving || isInFlight(data.operation);
+  }
+
+  if (dom.trSave) {
+    dom.trSave.disabled = !available || !dirty || built.errors.length > 0
+      || !configReady(data) || state.translationSaving || isInFlight(data.operation);
+    setText(dom.trSave, state.translationSaving ? '正在保存…' : '保存翻译设置');
+  }
+  if (dom.trReset) dom.trReset.disabled = !dirty || state.translationSaving;
+
+  if (dom.trDraft) {
+    let text;
+    if (!available) text = '面板服务未提供翻译状态，设置不可用';
+    else if (!configReady(data)) text = '连接配置不是就绪状态，保存已禁用';
+    else if (built.errors.length) text = built.errors[0];
+    else if (!dirty) text = '草稿与已保存一致';
+    else text = '草稿尚未保存';
+    setText(dom.trDraft, text);
+    dom.trDraft.dataset.dirty = String(dirty);
+    dom.trDraft.dataset.blocked = String(built.errors.length > 0 || !available);
+  }
+}
+
 /* ---------- state ---------- */
 
 function adoptState(next, { initial = false } = {}) {
@@ -1655,6 +2041,17 @@ function adoptState(next, { initial = false } = {}) {
     state.conn.dirty = connectionKey(connectionFormValues()) !== state.conn.base;
   }
 
+  /* 翻译同理：轮询不得覆盖用户正在编辑的字段，只更新比较基线。 */
+  if (!translationAvailable(next)) {
+    state.translation.base = null;
+    state.translation.dirty = false;
+  } else if (initial || !state.translation.dirty) {
+    fillTranslationForm();
+  } else {
+    state.translation.base = translationKey(savedTranslation(next));
+    state.translation.dirty = translationKey(translationFormValues()) !== state.translation.base;
+  }
+
   settlePending(next);
 }
 
@@ -1673,6 +2070,7 @@ function renderAll() {
   renderOperation(state.data);
   renderModels();
   renderSubagents();
+  renderTranslation();
   renderConnection();
   renderActions(state.data);
 }
@@ -1793,7 +2191,7 @@ function startPolling() {
   stopPolling();
   state.timer = window.setInterval(() => {
     if (document.hidden) return;
-    if (state.modelsSaving || state.subagentSaving || state.connSaving) return;
+    if (state.modelsSaving || state.subagentSaving || state.connSaving || state.translationSaving) return;
     loadState({ silent: true });
   }, POLL_MS);
 }
@@ -1846,6 +2244,17 @@ async function runAction(action) {
     showToast('已有操作正在进行，等待它结束后再试。', 'error');
     return;
   }
+  if (action === 'launch-translated-kimi') {
+    const launch = translationLaunchState(data, { dirty: state.translation.dirty });
+    if (!launch.ready) {
+      showToast(launch.problems[0], 'error');
+      return;
+    }
+  }
+  if (action === 'check-translation' && !translationAvailable(data)) {
+    showToast('面板服务未提供翻译状态，无法检查。', 'error');
+    return;
+  }
 
   state.pendingAction = action;
   renderActions(data);
@@ -1860,7 +2269,14 @@ async function runAction(action) {
       renderOperation(state.data);
       renderActions(state.data);
     }
-    showToast(action === 'launch-kimi' ? '启动请求已提交，等待运行时状态。' : '操作已提交，等待结果。', 'ok');
+    const submitted = action === 'launch-translated-kimi'
+      ? '启动请求已被接受，注入结果以运行时状态为准。'
+      : action === 'check-translation'
+        ? '检查请求已提交，等待运行时返回结果。'
+        : action === 'launch-kimi'
+          ? '启动请求已提交，等待运行时状态。'
+          : '操作已提交，等待结果。';
+    showToast(submitted, 'ok');
     /* 终态由 settlePending 在轮询读取到匹配 operation 时确认，避免重复提示。 */
     await loadState({ silent: true });
   } catch (error) {
@@ -1918,6 +2334,29 @@ async function confirmActionResult(action, opId) {
     if (op.state === 'verified') showToast('兼容检查通过：当前目录可被本机 Kimi 解析。', 'ok');
     else if (op.state === 'incompatible') showToast('兼容检查未通过：当前目录不被本机 Kimi 接受。', 'error');
     else if (op.state === 'unverified' || op.state === 'unavailable') showToast('兼容检查未能完成：' + (reasonText(op.reason) || '本机目录不可读') + '。', 'error');
+    return;
+  }
+
+  if (action === 'check-translation' || action === 'launch-translated-kimi') {
+    const runtime = translationRuntime(state.data);
+    const info = TRANSLATION_STATE[runtime.state] || { word: runtime.state || '未知' };
+    if (runtime.state === 'active') {
+      showToast('翻译已注入：Kimi 已确认翻译引擎在运行。', 'ok');
+      return;
+    }
+    if (action === 'launch-translated-kimi' && op.state === 'waiting-kimi-exit') {
+      showToast('Kimi 仍在运行。请正常退出 Kimi 后再点「从网关启动 Kimi」；本面板不会强制结束它。', 'error');
+      return;
+    }
+    if (failed || runtime.state === 'failed' || runtime.state === 'incompatible') {
+      showToast('翻译未注入：' + (translationReason(runtime.reason) || info.word || '注入未完成') + '。', 'error');
+      return;
+    }
+    if (op.state === 'starting' || op.state === 'attaching') {
+      showToast('启动请求已接受，等待运行时确认注入结果。', 'ok');
+      return;
+    }
+    showToast('翻译状态：' + (info.word || '未知') + '（注入尚未确认）。', 'error');
     return;
   }
 
@@ -2068,6 +2507,63 @@ async function saveSubagentTarget() {
   }
 }
 
+async function saveTranslation() {
+  const data = state.data;
+  if (!data || state.translationSaving) return false;
+  if (!translationAvailable(data)) {
+    showToast('面板服务未提供翻译状态，无法保存翻译设置。', 'error');
+    return false;
+  }
+  if (!configReady(data)) {
+    showToast('配置当前不是就绪状态，无法保存翻译设置。请先重启面板。', 'error');
+    return false;
+  }
+
+  const built = buildTranslation(translationFormValues());
+  if (dom.trErrors) {
+    setHidden(dom.trErrors, built.errors.length === 0);
+    dom.trErrors.replaceChildren(...built.errors.map((message) => {
+      const p = document.createElement('p');
+      p.textContent = message;
+      return p;
+    }));
+  }
+  if (built.errors.length) return false;
+
+  state.translationSaving = true;
+  renderTranslation();
+  renderActions(data);
+
+  try {
+    const res = await request(API.translation, { method: 'POST', body: { revision: data.revision, ...built.value } });
+    if (res && res.state) {
+      state.translationSaving = false;
+      adoptState(res.state);
+      state.lastSync = Date.now();
+      fillTranslationForm();
+      renderAll();
+      showToast(built.value.enabled
+        ? '翻译设置已保存。注入成功与否以运行时状态为准；需要从网关启动 Kimi 才会生效。'
+        : '翻译设置已保存为关闭。', 'ok');
+      return true;
+    }
+    state.translationSaving = false;
+    await loadState({ silent: true });
+    showToast('翻译设置已提交，状态已刷新。', 'ok');
+    return true;
+  } catch (error) {
+    state.translationSaving = false;
+    await handleSaveFailure(error, 'translation');
+    return false;
+  } finally {
+    state.translationSaving = false;
+    if (state.data) {
+      renderTranslation();
+      renderActions(state.data);
+    }
+  }
+}
+
 async function handleSaveFailure(error, context) {
   if (error.code === 'NO_KEY' || error.code === 'unauthorized') {
     clearKey();
@@ -2114,6 +2610,15 @@ async function handleSaveFailure(error, context) {
     if (context === 'connection' && dom.connErrors) {
       setHidden(dom.connErrors, false);
       dom.connErrors.replaceChildren(...[error.message].map((message) => {
+        const p = document.createElement('p');
+        p.textContent = message;
+        return p;
+      }));
+      return;
+    }
+    if (context === 'translation' && dom.trErrors) {
+      setHidden(dom.trErrors, false);
+      dom.trErrors.replaceChildren(...[error.message].map((message) => {
         const p = document.createElement('p');
         p.textContent = message;
         return p;
@@ -2190,7 +2695,8 @@ function onModelFilter(filter) {
 }
 
 function bindEvents() {
-  [['overview', dom.navOverview], ['models', dom.navModels], ['subagents', dom.navSubagents], ['connection', dom.navConnection]]
+  [['overview', dom.navOverview], ['models', dom.navModels], ['subagents', dom.navSubagents],
+    ['translation', dom.navTranslation], ['connection', dom.navConnection]]
     .forEach(([view, button]) => {
       if (button) button.addEventListener('click', () => setView(view));
     });
@@ -2358,12 +2864,31 @@ function bindEvents() {
   });
   if (dom.connSave) dom.connSave.addEventListener('click', saveConnection);
 
+  /* 思考翻译 */
+  if (dom.trForm) {
+    const onEdit = () => {
+      if (!translationAvailable(state.data)) return;
+      state.translation.dirty = translationKey(translationFormValues()) !== state.translation.base;
+      if (dom.trErrors) setHidden(dom.trErrors, true);
+      renderTranslation();
+    };
+    dom.trForm.addEventListener('input', onEdit);
+    dom.trForm.addEventListener('change', onEdit);
+  }
+  if (dom.trReset) dom.trReset.addEventListener('click', () => {
+    if (!translationAvailable(state.data)) return;
+    fillTranslationForm();
+    renderTranslation();
+    renderActions(state.data);
+  });
+  if (dom.trSave) dom.trSave.addEventListener('click', saveTranslation);
+
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', () => runAction(button.dataset.action));
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && state.key && !state.modelsSaving && !state.subagentSaving && !state.connSaving) {
+    if (!document.hidden && state.key && !state.modelsSaving && !state.subagentSaving && !state.connSaving && !state.translationSaving) {
       loadState({ silent: true });
     }
   });
@@ -2412,6 +2937,8 @@ function adoptLocationKey() {
   state.pendingOpId = null;
   state.lastSync = null;
   state.conn.dirty = false;
+  state.translation.base = null;
+  state.translation.dirty = false;
   modelSignature = '';
   recentSignature = '';
   saModelSignature = '';

@@ -52,6 +52,16 @@ function baseState(overrides = {}) {
   };
 }
 
+function translationState(overrides = {}) {
+  return {
+    configured: { enabled: false, provider: 'bing', targetLanguage: 'zh', view: 'translated',
+      customEndpoint: '', customModel: '', apiKeyEnv: 'KIMI_WORK_TRANSLATION_API_KEY' },
+    environment: { keySet: false },
+    runtime: { state: 'disabled' },
+    ...overrides,
+  };
+}
+
 function ui({ routes = {}, hash = '' } = {}) {
   const nodes = new Map();
   const events = new Map();
@@ -96,7 +106,9 @@ globalThis.panelUI = { state, modelIdFromAlias, evaluateBinding, isInFlight, con
   buildModel, parseEfforts, catalogueWith, buildConnection, evaluateSubagentDraft, savedTarget,
   adoptState, openEditor, closeEditor, editorDirty, saveCatalogue, modelFamilyFor, declaredEfforts,
   hasVision, setView, renderAll, renderOverview, renderModels, renderSubagents, renderConnection,
-  renderOperation, loadState, readEditorFields, renderEditor, validateEditor };`, context);
+  renderOperation, loadState, readEditorFields, renderEditor, validateEditor,
+  buildTranslation, savedTranslation, evaluateTranslation, translationLaunchState, translationKey,
+  translationFormValues, fillTranslationForm, renderTranslation, saveTranslation, translationAvailable };`, context);
   return { ...context.panelUI, window, events, nodes, requests };
 }
 
@@ -421,7 +433,7 @@ test('every view renders against a full, empty and disconnected state without th
     panel.state.editor = null;
     panel.state.deleteId = null;
     expect(() => panel.renderAll()).not.toThrow();
-    for (const view of ['overview', 'models', 'subagents', 'connection']) {
+    for (const view of ['overview', 'models', 'subagents', 'translation', 'connection']) {
       expect(() => panel.setView(view)).not.toThrow();
     }
   }
@@ -498,16 +510,284 @@ test('switching views hides every other section and marks exactly one navigation
   panel.state.draft = panel.savedTarget(panel.state.data);
   panel.state.draftDirty = false;
 
-  for (const view of ['overview', 'models', 'subagents', 'connection']) {
+  for (const view of ['overview', 'models', 'subagents', 'translation', 'connection']) {
     panel.setView(view);
-    const visible = ['overview', 'models', 'subagents', 'connection']
+    const visible = ['overview', 'models', 'subagents', 'translation', 'connection']
       .filter((name) => !panel.nodes.get('view-' + name).hidden);
     expect(visible).toEqual([view]);
-    const current = ['overview', 'models', 'subagents', 'connection']
+    const current = ['overview', 'models', 'subagents', 'translation', 'connection']
       .filter((name) => panel.nodes.get('nav-' + name).attrs['aria-current'] === 'page');
     expect(current).toEqual([view]);
   }
 
   panel.setView('not-a-view');
   expect(panel.state.view).toBe('overview');
+});
+
+test('the translation view is unavailable rather than broken when the service omits the field', () => {
+  const panel = ui();
+  panel.state.data = baseState();
+  panel.state.draft = panel.savedTarget(panel.state.data);
+  panel.state.draftDirty = false;
+
+  expect(() => panel.renderAll()).not.toThrow();
+  expect(() => panel.setView('translation')).not.toThrow();
+
+  expect(panel.nodes.get('tr-unavailable').hidden).toBe(false);
+  expect(panel.nodes.get('tr-enabled').disabled).toBe(true);
+  expect(panel.nodes.get('tr-save').disabled).toBe(true);
+  expect(panel.nodes.get('tr-launch').disabled).toBe(true);
+  expect(panel.nodes.get('tr-check').disabled).toBe(true);
+  expect(panel.evaluateTranslation(panel.state.data).word).toBe('不可用');
+  expect(panel.translationAvailable(panel.state.data)).toBe(false);
+});
+
+test('translation defaults to off with normalized settings from the panel state', () => {
+  const panel = ui();
+  const data = baseState({ translation: translationState() });
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+  panel.renderTranslation();
+
+  expect(panel.nodes.get('tr-enabled').checked).toBe(false);
+  expect(panel.nodes.get('tr-provider').value).toBe('bing');
+  expect(panel.nodes.get('tr-target').value).toBe('zh');
+  expect(panel.nodes.get('tr-view').value).toBe('translated');
+  expect(panel.nodes.get('tr-custom').hidden).toBe(true);
+  expect(panel.nodes.get('tr-save').disabled).toBe(true);
+  expect(panel.nodes.get('tr-launch').disabled).toBe(true);
+  expect(panel.nodes.get('tr-draft').textContent).toBe('草稿与已保存一致');
+
+  const odd = baseState({ translation: translationState({
+    configured: { enabled: true, provider: 'unknown', targetLanguage: 'xx', view: 'sideways' },
+  }) });
+  expect(panel.savedTranslation(odd)).toEqual({ enabled: true, provider: 'bing', targetLanguage: 'zh',
+    view: 'translated', customEndpoint: '', customModel: '', apiKeyEnv: 'KIMI_WORK_TRANSLATION_API_KEY' });
+});
+
+test('custom translation validates its endpoint and variable name while allowing an optional model', () => {
+  const panel = ui();
+  const base = { enabled: true, provider: 'custom', targetLanguage: 'ja', view: 'original',
+    customEndpoint: 'https://translate.example.com/v1/chat/completions', customModel: 'small-model',
+    apiKeyEnv: 'TRANSLATION_KEY' };
+  expect(panel.buildTranslation(base)).toEqual({ errors: [], value: base });
+  expect(panel.buildTranslation({ ...base, customEndpoint: 'http://127.0.0.1:8080/v1/chat/completions' }).errors).toEqual([]);
+  expect(panel.buildTranslation({ ...base, customEndpoint: '' }).errors.join(' ')).toContain('Chat Completions');
+  expect(panel.buildTranslation({ ...base, customEndpoint: 'http://translate.example.com/v1' }).errors.join(' ')).toContain('HTTPS');
+  expect(panel.buildTranslation({ ...base, customEndpoint: 'https://user:secret@translate.example.com/v1' }).errors.join(' ')).toContain('账号或密码');
+  expect(panel.buildTranslation({ ...base, customEndpoint: 'https://translate.example.com/v1?key=1' }).errors.join(' ')).toContain('查询参数');
+  expect(panel.buildTranslation({ ...base, customModel: '' }).errors).toEqual([]);
+  expect(panel.buildTranslation({ ...base, customModel: 'm'.repeat(2048) }).errors).toEqual([]);
+  expect(panel.buildTranslation({ ...base, customModel: 'm'.repeat(2049) }).errors.join(' ')).toContain('模型名称');
+  expect(panel.buildTranslation({ ...base, customModel: 'bad\nmodel' }).errors.join(' ')).toContain('控制字符');
+  expect(panel.buildTranslation({ ...base, apiKeyEnv: 'bad-name' }).errors.join(' ')).toContain('变量名');
+  expect(panel.buildTranslation({ ...base, apiKeyEnv: 'A'.repeat(129) }).errors.join(' ')).toContain('变量名');
+  const publicProvider = panel.buildTranslation({ ...base, provider: 'google', customEndpoint: 'not a url' });
+  expect(publicProvider.errors).toEqual([]);
+  expect(publicProvider.value).toMatchObject({ customEndpoint: '', customModel: 'small-model', apiKeyEnv: 'TRANSLATION_KEY' });
+  expect(panel.buildTranslation({ ...base, apiKeyEnv: '' }).value.apiKeyEnv).toBe('KIMI_WORK_TRANSLATION_API_KEY');
+});
+
+test('only a runtime-confirmed active state counts as injected translation', () => {
+  const panel = ui();
+
+  const disabled = baseState({ translation: translationState({ runtime: { state: 'disabled' } }) });
+  expect(panel.evaluateTranslation(disabled).word).toBe('已关闭');
+
+  const active = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'active', version: '3.2.21', pid: 4321 },
+  }) });
+  expect(panel.evaluateTranslation(active)).toEqual({ tone: 'ok', word: '已注入', note: 'Kimi 已确认翻译引擎在运行。' });
+
+  const enabledNotInjected = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'inactive' },
+  }) });
+  expect(panel.evaluateTranslation(enabledNotInjected).word).toBe('未生效');
+
+  const pending = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'pending-settings' },
+  }) });
+  expect(panel.evaluateTranslation(pending).word).toBe('正在应用');
+  const stopping = baseState({ translation: translationState({ runtime: { state: 'pending-settings' } }) });
+  expect(panel.evaluateTranslation(stopping).word).toBe('等待停用确认');
+  expect(panel.evaluateTranslation(baseState({ translation: translationState({ runtime: { state: 'stale' } }) })).word).toBe('停用未确认');
+
+  const waiting = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'waiting-kimi-exit' },
+  }) });
+  expect(panel.evaluateTranslation(waiting).note).toContain('正常退出');
+
+  const incompatible = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'incompatible', reason: 'version-unsupported' },
+  }) });
+  expect(panel.evaluateTranslation(incompatible)).toEqual({ tone: 'bad', word: '不兼容',
+    note: '当前 Kimi 版本不支持翻译注入。' });
+
+  const legacy = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'legacy-running' },
+  }) });
+  expect(panel.evaluateTranslation(legacy).note).toContain('旧注入');
+
+  expect(panel.evaluateTranslation(active, { dirty: true }).word).toBe('有未保存修改');
+  expect(panel.evaluateTranslation(active, { dirty: true }).note).toContain('当前运行状态未改变');
+});
+
+test('launching translated Kimi needs a saved enabled configuration and no unsaved draft', () => {
+  const panel = ui();
+  const disabled = baseState({ translation: translationState() });
+  expect(panel.translationLaunchState(disabled).ready).toBe(false);
+  expect(panel.translationLaunchState(disabled).problems.join(' ')).toContain('启用');
+
+  const enabled = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'inactive' },
+  }) });
+  expect(panel.translationLaunchState(enabled)).toEqual({ problems: [], ready: true });
+  expect(panel.translationLaunchState(enabled, { dirty: true }).problems.join(' ')).toContain('未保存');
+
+  const notReady = baseState({ configuration: { state: 'changed', file: 'gateway.json' },
+    translation: translationState({ configured: { ...translationState().configured, enabled: true } }) });
+  expect(panel.translationLaunchState(notReady).problems.join(' ')).toContain('重启');
+
+  panel.state.data = disabled;
+  panel.renderTranslation();
+  expect(panel.nodes.get('tr-launch').disabled).toBe(true);
+});
+
+test('a two-second polling refresh keeps an unsaved translation draft', () => {
+  const panel = ui();
+  const data = baseState({ translation: translationState() });
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+
+  panel.nodes.get('tr-enabled').checked = true;
+  panel.nodes.get('tr-provider').value = 'google';
+  panel.nodes.get('tr-target').value = 'ko';
+  panel.renderTranslation();
+  expect(panel.state.translation.dirty).toBe(true);
+
+  const refreshed = baseState({ revision: 'b'.repeat(64), translation: translationState({
+    configured: { ...translationState().configured, enabled: true, provider: 'custom',
+      targetLanguage: 'fr', customEndpoint: 'https://saved.example.com/v1', customModel: 'saved-model' },
+    runtime: { state: 'active', version: '3.2.21', pid: 99 },
+  }) });
+  panel.adoptState(refreshed);
+
+  expect(panel.nodes.get('tr-enabled').checked).toBe(true);
+  expect(panel.nodes.get('tr-provider').value).toBe('google');
+  expect(panel.nodes.get('tr-target').value).toBe('ko');
+  expect(panel.state.translation.dirty).toBe(true);
+  expect(panel.state.data.revision).toBe('b'.repeat(64));
+
+  panel.setView('translation');
+  expect(panel.nodes.get('tr-runtime').textContent).toBe('已注入');
+  expect(panel.nodes.get('tr-pid').textContent).toBe('99');
+  expect(panel.nodes.get('tr-verdict-word').textContent).toBe('有未保存修改');
+});
+
+test('saving translation posts every setting with the revision and never claims injection', async () => {
+  const saved = baseState({ revision: 'c'.repeat(64), translation: translationState({
+    configured: { enabled: true, provider: 'custom', targetLanguage: 'ja', view: 'original',
+      customEndpoint: 'https://translate.example.com/v1/chat/completions', customModel: 'small-model',
+      apiKeyEnv: 'TRANSLATION_KEY' },
+    environment: { keySet: true },
+    runtime: { state: 'pending-settings' },
+  }) });
+  const panel = ui({ hash: '#key=unit-panel-session',
+    routes: { '/api/translation': { status: 200, body: { ok: true, state: saved } } } });
+  panel.state.data = baseState({ translation: translationState() });
+  panel.adoptState(panel.state.data, { initial: true });
+
+  panel.nodes.get('tr-enabled').checked = true;
+  panel.nodes.get('tr-provider').value = 'custom';
+  panel.nodes.get('tr-target').value = 'ja';
+  panel.nodes.get('tr-view').value = 'original';
+  panel.nodes.get('tr-endpoint').value = 'https://translate.example.com/v1/chat/completions';
+  panel.nodes.get('tr-model').value = 'small-model';
+  panel.nodes.get('tr-keyenv').value = 'TRANSLATION_KEY';
+  panel.renderTranslation();
+
+  expect(await panel.saveTranslation()).toBe(true);
+
+  const posted = panel.requests.filter((entry) => entry.path === '/api/translation');
+  expect(posted.length).toBe(1);
+  expect(posted[0].method).toBe('POST');
+  expect(posted[0].body).toEqual({ revision: 'a'.repeat(64), enabled: true, provider: 'custom',
+    targetLanguage: 'ja', view: 'original', customEndpoint: 'https://translate.example.com/v1/chat/completions',
+    customModel: 'small-model', apiKeyEnv: 'TRANSLATION_KEY' });
+
+  const toast = messageOf(panel);
+  expect(toast).toContain('已保存');
+  expect(toast).toContain('以运行时状态为准');
+  expect(toast).not.toContain('已注入');
+  expect(panel.nodes.get('tr-verdict-word').textContent).toBe('正在应用');
+});
+
+test('a translation conflict refreshes state but keeps the unsaved draft', async () => {
+  const refreshed = baseState({ revision: 'd'.repeat(64), translation: translationState({
+    configured: { ...translationState().configured, enabled: true, provider: 'bing', targetLanguage: 'en' },
+  }) });
+  const panel = ui({
+    hash: '#key=unit-panel-session',
+    routes: {
+      '/api/translation': { status: 409, body: { error: { code: 'configuration_conflict', message: '配置已经变更。' } } },
+      '/api/state': { status: 200, body: refreshed },
+    },
+  });
+  panel.state.data = baseState({ translation: translationState() });
+  panel.adoptState(panel.state.data, { initial: true });
+
+  panel.nodes.get('tr-enabled').checked = true;
+  panel.nodes.get('tr-target').value = 'ru';
+  panel.renderTranslation();
+
+  expect(await panel.saveTranslation()).toBe(false);
+
+  expect(panel.state.data.revision).toBe('d'.repeat(64));
+  expect(panel.nodes.get('tr-enabled').checked).toBe(true);
+  expect(panel.nodes.get('tr-target').value).toBe('ru');
+  expect(panel.state.translation.dirty).toBe(true);
+  expect(messageOf(panel)).toContain('保留');
+});
+
+test('translation action receipts report the runtime result rather than the accepted request', async () => {
+  const panel = ui();
+
+  panel.state.data = baseState({ operation: { id: 'op-1', state: 'starting', action: 'launch-translated-kimi' },
+    translation: translationState({ configured: { ...translationState().configured, enabled: true },
+      runtime: { state: 'starting' } }) });
+  await panel.confirmActionResult('launch-translated-kimi', 'op-1');
+  expect(messageOf(panel)).toContain('等待运行时确认');
+
+  panel.state.data = baseState({ operation: { id: 'op-2', state: 'done', action: 'launch-translated-kimi' },
+    translation: translationState({ configured: { ...translationState().configured, enabled: true },
+      runtime: { state: 'active', version: '3.2.21' } }) });
+  await panel.confirmActionResult('launch-translated-kimi', 'op-2');
+  expect(messageOf(panel)).toContain('翻译已注入');
+
+  panel.state.data = baseState({ operation: { id: 'op-3', state: 'done', action: 'check-translation' },
+    translation: translationState({ configured: { ...translationState().configured, enabled: true },
+      runtime: { state: 'inactive' } }) });
+  await panel.confirmActionResult('check-translation', 'op-3');
+  expect(messageOf(panel)).toContain('注入尚未确认');
+  expect(messageOf(panel)).not.toContain('翻译已注入');
+
+  panel.state.data = baseState({ operation: { id: 'op-4', state: 'waiting-kimi-exit', action: 'launch-translated-kimi' },
+    translation: translationState({ configured: { ...translationState().configured, enabled: true },
+      runtime: { state: 'waiting-kimi-exit' } }) });
+  await panel.confirmActionResult('launch-translated-kimi', 'op-4');
+  expect(messageOf(panel)).toContain('正常退出');
+  expect(messageOf(panel)).toContain('不会强制结束');
+
+  panel.state.data = baseState({ operation: { id: 'op-5', state: 'done', action: 'check-translation' },
+    translation: translationState({ configured: { ...translationState().configured, enabled: true },
+      runtime: { state: 'incompatible', reason: 'version-unsupported' } }) });
+  await panel.confirmActionResult('check-translation', 'op-5');
+  expect(messageOf(panel)).toContain('当前 Kimi 版本不支持翻译注入');
 });

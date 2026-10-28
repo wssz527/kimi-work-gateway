@@ -317,7 +317,7 @@ The dark theme re-points the same token names (`neutral-bg-dark` … `focus-dark
 
 ## Layout
 
-A two-column shell: a 232px sticky rail (`100dvh`, 20px/14px/16px padding, 22px stack gap) against one working surface. The surface is capped at 1180px, padded 28px at the page edge and 48px at the bottom, with an 18px gap between panels. The rail carries identity, the four views with the model count, the gateway readout and the appearance picker; the surface carries the task.
+A two-column shell: a 232px sticky rail (`100dvh`, 20px/14px/16px padding, 22px stack gap) against one working surface. The surface is capped at 1180px, padded 28px at the page edge and 48px at the bottom, with an 18px gap between panels. The rail carries identity, the five views (overview, models, subagents, translation and connection) with the model count, the gateway readout and the appearance picker; the surface carries the task.
 
 Every view follows the same beat: top bar (title, one-line lede, sync time, refresh) → optional banners → panels. Panels are 1px-ruled 12px-radius plates with an 18/20/20px pad, a head row that wraps at narrow widths, and an optional action row separated by a hairline.
 
@@ -326,9 +326,9 @@ The overview uses a hairline fact grid — four cells separated by 1px gaps over
 Responsive behaviour is structural, not fluid:
 
 - **≤1180px** — the workbench collapses to one column and the inspector becomes a normal block below the table (no longer sticky).
-- **≤980px** — the rail turns into a top band: brand, a horizontally scrolling nav, and a footer with the appearance picker; the gateway readout and nav counts are hidden; the surface padding becomes 18px 16px with a 40px bottom.
+- **≤980px** — the rail turns into a top band: brand, a five-column nav, and a footer with the appearance picker; the gateway readout and nav counts are hidden; the surface padding becomes 18px 16px with a 40px bottom.
 - **≤760px** — facts 4→2 columns, saved/adopted and mode choices stack to one, field rows and diagnostics go single-column, the top bar and panel heads stack, the segmented filter fills the width, and the model table drops 协议 and 输出.
-- **≤560px** — nav becomes a 2-column grid with 40px rows, facts go to one column, metrics go 2 columns with the third spanning both, the table drops 能力 and 档位 (`col-actions` narrows to 68px), panel padding drops to 15/14/16px and the title to 21px.
+- **≤560px** — nav becomes a three-column grid with 40px rows (two columns at ≤380px), facts go to one column, metrics go 2 columns with the third spanning both, the table drops 能力 and 档位 (`col-actions` narrows to 68px), panel padding drops to 15/14/16px and the title to 21px. Translation action buttons stack to full width.
 
 The recent-request table is capped at 340px with a sticky head; the model table is not capped because the catalogue is the work. Spacing uses one short rhythm — 4 / 8 / 12 / 18 / 28px — with the control height fixed at 32px (27px for the small button) so rows and fields align across panels. The connection form is the one place that runs on a 16px group rhythm instead of 18px, because its field groups, environment block and pending diff are read as one sequence.
 

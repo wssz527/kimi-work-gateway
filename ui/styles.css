@@ -1331,6 +1331,40 @@ input[type="search"]::-webkit-search-cancel-button { display: none; }
   gap: 8px;
 }
 
+/* ---------- translation ---------- */
+
+#tr-form {
+  display: grid;
+  gap: 16px;
+}
+
+.check--lead {
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  background: var(--surface-sunk);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.check--lead input { margin-top: 0; }
+
+#tr-custom {
+  gap: 12px;
+}
+
+#tr-key-state { color: var(--ink-3); }
+#tr-key-state[data-tone="bad"] { color: var(--bad); }
+#tr-key-state[data-tone="ok"] { color: var(--ink-3); }
+
+.panel__actions--start { justify-content: flex-start; }
+
+@media (max-width: 560px) {
+  .panel__actions--start { flex-direction: column; align-items: stretch; }
+  .panel__actions--start .btn { width: 100%; }
+}
+
 /* ---------- gate ---------- */
 
 .gate {
@@ -1436,20 +1470,20 @@ input[type="search"]::-webkit-search-cancel-button { display: none; }
   .brand { padding: 0; }
 
   .nav {
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
-    overflow-x: auto;
     padding-bottom: 2px;
-    scrollbar-width: none;
   }
-  .nav::-webkit-scrollbar { display: none; }
 
   .nav__item {
     width: auto;
-    flex: none;
+    min-width: 0;
     min-height: 32px;
-    padding: 5px 11px;
+    padding: 5px 6px;
     white-space: nowrap;
+    justify-content: center;
+    gap: 5px;
   }
   .nav__count { display: none; }
 
@@ -1487,8 +1521,8 @@ input[type="search"]::-webkit-search-cancel-button { display: none; }
 }
 
 @media (max-width: 560px) {
-  .nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
-  .nav__item { width: 100%; min-height: 40px; }
+  .nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .nav__item { width: 100%; min-height: 38px; padding: 5px 6px; font-size: 12.5px; }
   .rail__foot { flex-wrap: wrap; }
   .facts, .facts--compact { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: 1fr 1fr; }
@@ -1500,6 +1534,11 @@ input[type="search"]::-webkit-search-cancel-button { display: none; }
   .col-actions { width: 68px; }
   .toast { left: 16px; right: 16px; max-width: none; transform: translate(0, 10px); }
   .toast[data-open="true"] { transform: translate(0, 0); }
+}
+
+@media (max-width: 380px) {
+  /* 极窄屏（≤380px）三项一行放不下完整标签，退回两列。 */
+  .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

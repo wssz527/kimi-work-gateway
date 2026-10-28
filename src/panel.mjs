@@ -29,6 +29,11 @@ const MESSAGES = {
   invalid_connection_config: '连接配置不完整或包含不支持的字段。凭证请保存在环境变量中。',
   subagent_model_in_use: '当前子代理仍使用此模型或思考档位，请先更改子代理目标，再修改模型能力。',
   configuration_apply_failed: '模型目录已保存，但运行策略未能更新，请检查状态后重启。',
+  invalid_translation_config: '翻译设置无效，请检查服务、语言、显示方式和环境变量名。',
+  invalid_translation_endpoint: '翻译端点需使用 HTTPS（本机可用 HTTP），且不能包含凭证或查询参数。',
+  translation_endpoint_required: '请填写自定义翻译服务的完整 Chat Completions 地址。',
+  translation_not_enabled: '请先保存并启用思考翻译，再从网关启动 Kimi。',
+  translation_apply_failed: '翻译设置已保存，但会话尚未应用，请检查状态目录后重试。',
 };
 
 function authorized(actual, key) {
@@ -95,7 +100,7 @@ export class GatewayPanel {
       if (asset && ['GET', 'HEAD'].includes(req.method)) {
         res.writeHead(200, { 'Content-Type': asset.type }); res.end(req.method === 'HEAD' ? undefined : asset.content); return;
       }
-      if (!['/api/state', '/api/subagents', '/api/actions', '/api/models', '/api/connection'].includes(req.url)) throw new PanelError('not_found', 404);
+      if (!['/api/state', '/api/subagents', '/api/actions', '/api/models', '/api/connection', '/api/translation'].includes(req.url)) throw new PanelError('not_found', 404);
       if (!authorized(req.headers.authorization, this.key)) throw new PanelError('unauthorized', 401);
       if (req.method === 'GET' && req.url === '/api/state') { json(200, await this.controller.state()); return; }
       if (req.method !== 'POST' || req.url === '/api/state') throw new PanelError('method_not_allowed', 405);
@@ -104,6 +109,7 @@ export class GatewayPanel {
       if (req.url === '/api/subagents') json(200, { ok: true, state: await this.controller.apply(input) });
       else if (req.url === '/api/models') json(200, { ok: true, state: await this.controller.saveModels(input) });
       else if (req.url === '/api/connection') json(200, { ok: true, state: await this.controller.saveConnection(input) });
+      else if (req.url === '/api/translation') json(200, { ok: true, state: await this.controller.saveTranslation(input) });
       else json(202, { ok: true, operation: await this.controller.action(input) });
     } catch (error) {
       if (res.headersSent || res.destroyed) return;

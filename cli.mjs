@@ -8,6 +8,7 @@ import { BYOK_DNS_PORT, KimiWorkGateway, NativeByokDNS, NativeSetup, OpenAIBacke
 import { readSubagentJSON } from './src/subagent-policy.mjs';
 import { PanelController } from './src/panel-controller.mjs';
 import { GatewayPanel } from './src/panel.mjs';
+import { TranslationRuntime } from './src/translation-runtime.mjs';
 
 const USAGE = [
   'usage: kimi-work-gateway <command> [options]',
@@ -311,6 +312,8 @@ async function statusCommand(argv, env, io, overrides = {}) {
   }
   const runtime = new (overrides.SubagentRuntime || SubagentRuntime)({ stateDir });
   io.out('subagent runtime: ' + runtime.inspect().state);
+  const translation = new TranslationRuntime({ stateDir, kimiDir, env }).inspect();
+  io.out('translation: ' + translation.state + (translation.reason ? ' (' + translation.reason + ')' : ''));
   return 0;
 }
 

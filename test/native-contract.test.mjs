@@ -53,6 +53,11 @@ test('summarize explains every state without throwing', () => {
     .toContain('1 models accepted');
   expect(summarize({ state: 'incompatible', reason: 'models_skipped', skipped: ['x'] }))
     .toContain('INCOMPATIBLE');
+  const hidden = summarize({ state: 'verified', accepted: [], contracts: { native_byok_flag: false } });
+  expect(hidden).toContain('native_byok_flag not-observed');
+  expect(hidden).toContain('may be hidden by obfuscation');
+  expect(hidden).not.toContain('missing');
+  expect(hidden).toContain('parser: verified');
 });
 
 test('models that declare no capabilities do not claim tools or reasoning', () => {

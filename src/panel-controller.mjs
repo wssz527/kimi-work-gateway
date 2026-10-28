@@ -9,11 +9,14 @@ import { copySetupToken } from './native-clipboard.mjs';
 import { nativeFlagFile } from './paths.mjs';
 import { inspect as inspectKimiContract } from './kimi-contract.mjs';
 import { checkUpstream, connectionFields, validateConnection, validatePanelModels } from './panel-settings.mjs';
+import { normalizeTranslationConfig } from './translation-config.mjs';
+import { TranslationRuntime } from './translation-runtime.mjs';
 
-const ACTIONS = new Set(['prepare-runtime', 'launch-kimi', 'prepare-native', 'remove-dns', 'copy-token', 'check-upstream', 'check-compat']);
+const ACTIONS = new Set(['prepare-runtime', 'launch-kimi', 'prepare-native', 'remove-dns', 'copy-token', 'check-upstream', 'check-compat',
+  'launch-translated-kimi', 'check-translation']);
 const MODEL_FIELDS = new Set(['id', 'name', 'protocol', 'contextWindow', 'maxOutputTokens', 'tools', 'reasoning', 'inputModalities', 'reasoningEfforts', 'defaultEffort']);
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const base = config => ({ ...connectionFields(config), models: config.models });
+const base = config => ({ ...connectionFields(config), models: config.models, translation: normalizeTranslationConfig(config.translation) });
 const reason = error => /^[a-z][a-z0-9_-]{0,100}$/.test(error?.message) ? error.message : 'panel_operation_failed';
 const summarize = value => ({ mode: value.mode,
   ...(value.mode === 'force' ? { model: value.model, modelAlias: value.modelAlias, ...(value.effort === undefined ? {} : { effort: value.effort }) } : {}),
@@ -26,7 +29,7 @@ export class PanelError extends Error {
 export class PanelController {
   constructor({ configFile, config, gateway, backend, stateDir, kimiDir, policy,
     runtime, setup, probe, copyToken = copySetupToken, onPolicy, env = process.env,
-    inspectContract = inspectKimiContract } = {}) {
+    inspectContract = inspectKimiContract, translationRuntime } = {}) {
     this.configFile = path.resolve(configFile);
     this.config = config;
     this.baseHash = digest(base(config));
@@ -37,6 +40,9 @@ export class PanelController {
     this.runtime = runtime || new SubagentRuntime({ stateDir: path.resolve(stateDir) });
     this.setup = setup || new NativeSetup({ stateDir, flagFile: nativeFlagFile(kimiDir) });
     this.probe = probe || new NativeSetupProbe({ flagFile: nativeFlagFile(kimiDir) });
+    this.translation = translationRuntime || new TranslationRuntime({ stateDir, kimiDir, env });
+    try { this.translation.configure(config.translation); }
+    catch { this.translationError = 'translation_settings_conflict'; }
     this.copyToken = copyToken;
     this.onPolicy = onPolicy;
     this.env = env;
@@ -114,12 +120,20 @@ export class PanelController {
     }
     const saved = current ? connectionFields(current.config) : null;
     const active = connectionFields(this.config);
+    const translationSettings = normalizeTranslationConfig((current?.config ?? this.config).translation);
+    let translationStatus;
+    try { translationStatus = this.translationError ? { state: 'failed', reason: this.translationError } : this.translation.inspect(); }
+    catch { translationStatus = { state: 'failed', reason: 'translation_session_failed' }; }
+    const translationRuntime = Object.fromEntries(['state', 'version', 'reason']
+      .filter(field => typeof translationStatus?.[field] === 'string').map(field => [field, translationStatus[field]]));
+    if (Number.isInteger(translationStatus?.pid)) translationRuntime.pid = translationStatus.pid;
     return { schemaVersion: 1, revision: current?.revision ?? null,
       configuration: { state: current ? (current.compatible ? 'ready' : 'changed') : 'unavailable', file: path.basename(this.configFile) },
       gateway: { state: this.gateway.server ? 'running' : 'stopped', url: this.gateway.url,
         modelCount: this.backend.models.length, activeRequests: this.gateway.inflight.size },
       models: this.backend.models.map(model => ({ ...model })),
       subagents: { configured: summarize(configured), policy, runtime },
+      translation: { configured: translationSettings, environment: { keySet: Boolean(this.env[translationSettings.apiKeyEnv]) }, runtime: translationRuntime },
       connection: { active, saved, environment: { apiKeySet: Boolean(this.env[saved?.upstream.apiKeyEnv || active.upstream.apiKeyEnv]),
         tokenSet: Boolean(this.env[saved?.tokenEnv || active.tokenEnv]) } },
       metrics: structuredClone(this.gateway.metrics), diagnostics: structuredClone(this.diagnostics),
@@ -181,6 +195,39 @@ export class PanelController {
     return this.state();
   }
 
+  async saveTranslation(input) {
+    await this.serialize(async () => {
+      const current = this.currentConfiguration(input);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new PanelError('invalid_translation_config');
+      const { revision, ...value } = input;
+      let settings;
+      try { settings = normalizeTranslationConfig(value); }
+      catch (error) { throw new PanelError(reason(error)); }
+      this.persist(current, { ...current.document, translation: settings });
+      this.config = { ...this.config, translation: settings };
+      this.baseHash = digest(base(this.config));
+      try {
+        this.translation.configure(settings);
+        this.translationError = undefined;
+      } catch (error) {
+        this.translationError = 'translation_settings_conflict';
+        throw new PanelError('translation_apply_failed', 503, { saved: true, reason: reason(error) });
+      }
+    });
+    return this.state();
+  }
+
+  async launchTranslation() {
+    let current;
+    try { current = this.readConfiguration(); } catch { throw new PanelError('configuration_unavailable', 409); }
+    if (!current.compatible) throw new PanelError('configuration_changed', 409);
+    const policy = this.ownedPolicy();
+    if (policy.mode === 'blocked') throw new PanelError('subagent_policy_unavailable', 409);
+    this.translation.configure(current.config.translation);
+    this.translationError = undefined;
+    return this.translation.launch({ subagentRuntime: this.runtime, force: policy.mode === 'force' });
+  }
+
   async diagnose(action) {
     if (action === 'check-upstream') {
       const result = await checkUpstream(this.backend);
@@ -229,7 +276,10 @@ export class PanelController {
           this.ownedPolicy();
           if (input.action === 'check-upstream' || input.action === 'check-compat') result = await this.diagnose(input.action);
           else if (input.action === 'prepare-runtime') result = this.runtime.prepare();
-          else if (input.action === 'launch-kimi') result = await this.runtime.launch();
+          else if (input.action === 'launch-translated-kimi') result = await this.launchTranslation();
+          else if (input.action === 'check-translation') result = this.translation.check();
+          else if (input.action === 'launch-kimi') result = normalizeTranslationConfig(this.config.translation).enabled
+            ? await this.launchTranslation() : await this.runtime.launch();
           else if (input.action === 'copy-token') result = { state: await this.copyToken({ request: input,
             stateDir: this.stateDir, key: this.gateway.connection?.key }) };
           else result = await this.setup.run({ id: input.id, at: input.at,

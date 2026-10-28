@@ -1,6 +1,6 @@
 {
   "name": "kimi-work-gateway",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Generic third-party model gateway for Kimi desktop Work, with a standalone CLI and an embeddable core library.",
   "type": "module",
   "main": "./src/index.mjs",

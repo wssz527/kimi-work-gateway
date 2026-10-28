@@ -28,6 +28,7 @@
   <symbol id="i-copy" viewBox="0 0 16 16"><path d="M5.6 5.6h8v8h-8z"/><path d="M2.4 10.4v-8h8"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 16 16"><path d="M2.4 3.2h11.2v9.6H2.4z"/><path d="M4.9 6.4 6.9 8l-2 1.6"/><path d="M8.5 10h2.7"/></symbol>
   <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.7 9.3 9.3 6.7"/><path d="M5.7 11.1 4.5 12.3a2.5 2.5 0 0 1-3.5-3.5L3.3 6.5a2.5 2.5 0 0 1 3.5 0"/><path d="M10.3 4.9l1.2-1.2a2.5 2.5 0 0 1 3.5 3.5l-2.3 2.3a2.5 2.5 0 0 1-3.5 0"/></symbol>
+  <symbol id="i-translate" viewBox="0 0 16 16"><path d="M2.4 3.4h5.4v5.2H4.7L2.4 10.4z"/><path d="M9 8.4h4.6"/><path d="M11.6 6.2 13.8 8.4l-2.2 2.2"/></symbol>
 </svg>
 
 <a class="skip" href="#main">跳到主内容</a>
@@ -61,6 +62,10 @@
       <button class="nav__item" id="nav-subagents" type="button">
         <svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>
         <span>子代理</span>
+      </button>
+      <button class="nav__item" id="nav-translation" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-translate"/></svg>
+        <span>思考翻译</span>
       </button>
       <button class="nav__item" id="nav-connection" type="button">
         <svg class="icon" aria-hidden="true"><use href="#i-plug"/></svg>
@@ -385,6 +390,120 @@
       </div>
     </section>
 
+    <section class="view" id="view-translation" aria-labelledby="translation-heading" hidden>
+      <div class="panel" id="translation-panel">
+        <div class="panel__head">
+          <h2 id="translation-heading">思考翻译</h2>
+          <p>把 Kimi 的思考过程翻译成所选语言；默认关闭，保存只写入配置。</p>
+        </div>
+
+        <p class="note note--warn" id="tr-unavailable" hidden>当前面板服务没有提供翻译状态。翻译设置不可用，页面其余功能不受影响。</p>
+
+        <form id="tr-form" novalidate>
+          <label class="check check--lead"><input type="checkbox" id="tr-enabled"><span>启用思考翻译</span></label>
+
+          <div class="field-row">
+            <label class="field">
+              <span class="field__label">翻译服务</span>
+              <select id="tr-provider">
+                <option value="bing">Bing 翻译</option>
+                <option value="google">Google 翻译</option>
+                <option value="custom">自定义 Chat 服务</option>
+              </select>
+              <span class="field__hint" id="tr-provider-hint">公共翻译服务，无需填写凭证。</span>
+            </label>
+            <label class="field">
+              <span class="field__label">目标语言</span>
+              <select id="tr-target">
+                <option value="zh">中文</option>
+                <option value="en">英语</option>
+                <option value="ja">日语</option>
+                <option value="ko">韩语</option>
+                <option value="es">西班牙语</option>
+                <option value="fr">法语</option>
+                <option value="de">德语</option>
+                <option value="ru">俄语</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="field">
+            <span class="field__label">默认展示</span>
+            <select id="tr-view">
+              <option value="translated">译文</option>
+              <option value="original">原文</option>
+            </select>
+            <span class="field__hint">只是默认展开的内容；每段思考仍可在原文与译文之间切换。</span>
+          </label>
+
+          <fieldset class="field field--group" id="tr-custom" hidden>
+            <legend class="field__label">自定义 Chat 服务</legend>
+            <label class="field">
+              <span class="field__label">Chat Completions 地址</span>
+              <input id="tr-endpoint" class="mono" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1/chat/completions">
+              <span class="field__hint">完整的 Chat Completions URL，使用 HTTPS；本机回环地址可用 HTTP。不能包含账号、查询参数或片段。</span>
+            </label>
+            <div class="field-row">
+              <label class="field">
+                <span class="field__label">模型（可选）</span>
+                <input id="tr-model" class="mono" autocomplete="off" spellcheck="false" placeholder="留空使用服务默认模型">
+              </label>
+              <label class="field">
+                <span class="field__label">API Key 变量名</span>
+                <input id="tr-keyenv" class="mono" autocomplete="off" spellcheck="false" placeholder="KIMI_WORK_TRANSLATION_API_KEY">
+                <span class="field__hint">只填写变量名，凭证由网关进程读取，不会进入页面。</span>
+              </label>
+            </div>
+            <p class="field__hint" id="tr-key-state">正在读取环境变量状态…</p>
+          </fieldset>
+
+          <p class="hint" id="tr-egress">启用后，被翻译的思考文本会发送到所选的翻译服务；代码块、行内代码与链接会保留原文。翻译与子代理目标可以同时启用，互不影响。</p>
+
+          <p class="errors" id="tr-errors" hidden></p>
+
+          <div class="panel__actions">
+            <p class="draft" id="tr-draft">草稿与已保存一致</p>
+            <button class="btn btn--quiet" id="tr-reset" type="button" disabled>放弃修改</button>
+            <button class="btn btn--primary" id="tr-save" type="button" disabled>保存翻译设置</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head">
+          <h2>注入状态</h2>
+          <p>保存成功或启动请求被接受都不等于已注入；这里只显示运行时确认的结果。</p>
+        </div>
+        <dl class="facts facts--compact">
+          <div class="fact">
+            <dt>运行时</dt>
+            <dd><span class="dot" id="tr-runtime-dot" data-tone="neutral"></span><span id="tr-runtime">…</span></dd>
+          </div>
+          <div class="fact"><dt>Kimi 版本</dt><dd class="mono" id="tr-version">—</dd></div>
+          <div class="fact"><dt>宿主进程</dt><dd class="mono" id="tr-pid">—</dd></div>
+          <div class="fact">
+            <dt>自定义服务 Key</dt>
+            <dd><span class="dot" id="tr-env-dot" data-tone="neutral"></span><span id="tr-env">…</span></dd>
+          </div>
+        </dl>
+        <p class="verdict" id="tr-verdict">
+          <span class="dot" id="tr-verdict-dot" data-tone="neutral"></span>
+          <strong id="tr-verdict-word">读取中</strong>
+          <span class="verdict__note" id="tr-verdict-note"></span>
+        </p>
+        <p class="hint" id="tr-runtime-note">当前 Kimi 需要正常退出后，再从网关启动才能带上翻译；本面板不会结束已在运行的 Kimi，也不会自动点击任何按钮。</p>
+        <div class="panel__actions panel__actions--start">
+          <button class="btn btn--outline" id="tr-launch" type="button" data-action="launch-translated-kimi">
+            <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>从网关启动 Kimi
+          </button>
+          <button class="btn btn--outline" id="tr-check" type="button" data-action="check-translation">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>检查翻译状态
+          </button>
+        </div>
+        <p class="hint">网关维护翻译会话；指定子代理模型时，同时使用已验证的运行时副本。语言、服务或展示切换保存后由会话应用，无需重启推理网关。</p>
+      </div>
+    </section>
+
     <section class="view" id="view-connection" aria-labelledby="connection-heading" hidden>
       <div class="panel">
         <div class="panel__head">
@@ -447,7 +566,7 @@
           <li>重新执行 <code>kimi-work-gateway panel --config &lt;配置文件&gt;</code>。</li>
           <li>用终端新输出的 <code>http://127.0.0.1:&lt;端口&gt;/#key=…</code> 链接打开面板。</li>
         </ol>
-        <p class="hint">配置变更期间模型与子代理不可保存；连接可以改回当前生效值以撤销待重启的修改。</p>
+        <p class="hint">配置变更期间模型、子代理与翻译设置不可保存；连接可以改回当前生效值以撤销待重启的修改。</p>
         <p class="mono restart__file" id="restart-file">—</p>
       </div>
 
