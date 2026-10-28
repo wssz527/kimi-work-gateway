@@ -18,7 +18,7 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 
 ## 安装与首次使用
 
-需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。子代理强制选模和思考翻译目前只支持普通 **Kimi 3.2.21** 的已校验内核，Kimi Code 不适用。
+需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。基础接入、强制子代理和思考翻译都优先按实际接入口检查兼容性，版本号变化不会单独禁用功能；Kimi Code 不适用。真实桌面实测基线为 Kimi 3.2.21，其他版本以结构探测和运行回执为准。
 
 ### 1. 一条命令安装
 
@@ -174,7 +174,27 @@ kimi-work-gateway panel --config gateway.json
 
 翻译入口由 `panel` 提供；单独的 `serve` 或 `subagents-launch` 不会启动翻译宿主。设置保存与实际注入分别显示，只有 Work 渲染器确认后才显示生效。Kimi 思考区域提供 **译文 / 原文 / 重译**，折叠随原思考区域同步；停用设置后恢复原文。关闭面板标签不影响翻译；退出网关后已启动的会话宿主继续服务该 Kimi，重启同一状态目录的面板可继续管理。Kimi 退出后宿主自动结束。
 
-目前翻译仅适配 **普通 Kimi 3.2.21 的 Work 页面**，版本不符会拒绝启动；不适用于 Kimi Code。它通过随启动建立的私有 CDP pipe 注入，不暴露调试 TCP 端口、不提供任意脚本 HTTP 接口、不修改安装包或签名。若仍从任务 3 的旧翻译启动器进入，会提示旧实例存在；请退出后使用网关的新入口。原文和译文仅在页面有界内存中缓存，不写入 localStorage 或网关状态文件。
+翻译按普通 Kimi 的实际 Work 页面、私有 CDP 协议和渲染器确认判断，不再使用 Kimi 版本白名单；没有思考内容时等待内容。它不适用于 Kimi Code，通过随启动建立的私有 CDP pipe 注入，不暴露调试 TCP 端口、不提供任意脚本 HTTP 接口、不修改安装包或签名。若仍从任务 3 的旧翻译启动器进入，会提示旧实例存在；请退出后使用网关的新入口。原文和译文仅在页面有界内存中缓存，不写入 localStorage 或网关状态文件。
+
+## 跨版本与 GitHub 更新
+
+**优先继续使用当前版本。** Kimi 的版本号或整份源码摘要变化不会单独触发“不支持”。子代理准备会按配置读取、创建、运行和模型档案接点检查结构，并记录摘要以验证副本完整性；启动时若安装来源已更新，会按新来源自动准备本地副本。只有接点真正缺失或歧义才拒绝该适配，普通模型网关可继续运行。翻译同样以实际协议和页面回执为准。结构保持兼容时，无需跟着 Kimi 升级本工具；结构真正改变时再检查本项目更新。
+
+从 v0.6.0 起，可在 **连接与诊断 → 程序更新** 中检查 GitHub 最新稳定版、下载更新或回退。命令行也可使用：
+
+```sh
+kimi-work-gateway check-update
+kimi-work-gateway update
+kimi-work-gateway rollback-update
+```
+
+Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 API Key，也不修改模型配置或 Kimi 设置；旧版没有更新命令，需先按安装命令升级到 v0.6.0 一次。
+
+更新来自 `wssz527/kimi-work-gateway` 的 GitHub 稳定 Release。下载、归档路径和 SHA-256 校验成功后才切换用户状态目录中的程序版本，保留上一版本供回退；网络错误、限流或校验失败会保留当前版本。更新与回退均在**下次启动网关**时生效，当前进程不会自动重启，也不会结束 Kimi。重启时继续使用原来的配置路径和环境变量。没有新版本时无需更新，不会强制降级。
+
+更新状态通过 `GET /api/state` 的 `updates` 返回：`currentVersion` 是当前运行版本，`latestVersion` 是上次检查的稳定版，`pendingVersion` 是下次启动采用的版本，`rollbackVersion` 是可回退版本。`state` 为 `not-checked`、`checking`、`current`、`available`、`staged` 或 `failed`，另有可选 `checkedAt`、`releaseURL` 和 `reason`。面板操作仍经带 ID 去重的 `POST /api/actions`，新增 `check-update`、`install-update`、`rollback-update`。
+
+更新位置默认属于用户状态目录，可用绝对路径环境变量 `KIMI_WORK_GATEWAY_UPDATE_DIR` 指定独立更新目录；使用自定义目录时，后续启动也须使用同一变量。
 
 ## 模型声明
 

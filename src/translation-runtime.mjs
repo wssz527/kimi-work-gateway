@@ -10,7 +10,6 @@ import { readSubagentJSON, writeSubagentJSON } from './subagent-policy.mjs';
 const HOST = fileURLToPath(new URL('./translation-host.mjs', import.meta.url));
 const STATES = new Set(['starting', 'attaching', 'active', 'inactive', 'legacy-running', 'failed', 'exited']);
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export const TRANSLATION_KIMI_VERSIONS = new Set(['3.2.21']);
 export const translationRevision = (settings, homeDir) => digest({ homeDir, settings });
 export const translationAlive = pid => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -35,8 +34,7 @@ export function translationInstallation({ archive, application, platform = proce
     : [path.join(path.dirname(directory), 'Kimi.exe'), path.join(path.dirname(directory), 'kimi-desktop.exe')];
   const executable = application || candidates.find(candidate => fs.existsSync(candidate));
   if (!executable || !fs.existsSync(executable)) throw Error('translation_kimi_unavailable');
-  const version = installedVersion(file);
-  if (!TRANSLATION_KIMI_VERSIONS.has(version)) throw Error('translation_runtime_incompatible');
+  const version = installedVersion(file) || 'unknown';
   return { archive: path.resolve(file), application: path.resolve(executable), version, platform };
 }
 

@@ -626,7 +626,7 @@ test('only a runtime-confirmed active state counts as injected translation', () 
     runtime: { state: 'incompatible', reason: 'version-unsupported' },
   }) });
   expect(panel.evaluateTranslation(incompatible)).toEqual({ tone: 'bad', word: '不兼容',
-    note: '当前 Kimi 版本不支持翻译注入。' });
+    note: '没有找到可注入的 Kimi 渲染入口，或页面结构与翻译引擎不匹配。' });
 
   const legacy = baseState({ translation: translationState({
     configured: { ...translationState().configured, enabled: true },
@@ -789,5 +789,6 @@ test('translation action receipts report the runtime result rather than the acce
     translation: translationState({ configured: { ...translationState().configured, enabled: true },
       runtime: { state: 'incompatible', reason: 'version-unsupported' } }) });
   await panel.confirmActionResult('check-translation', 'op-5');
-  expect(messageOf(panel)).toContain('当前 Kimi 版本不支持翻译注入');
+  expect(messageOf(panel)).toContain('渲染入口，或页面结构与翻译引擎不匹配');
+  expect(messageOf(panel)).not.toContain('。。');
 });

@@ -127,8 +127,10 @@ test('session launches a private pipe, keeps translation credentials in the host
     spawnApp: (...args) => { launch = args; process.nextTick(() => child.emit('spawn')); return child; },
     pipeFactory: () => f.pipe });
   f.pipe.targets = [];
+  writeSubagentJSON(f.runtime.launchFile, { ...f.request, version: '99.4.0' });
   const run = f.session.run();
   await new Promise(resolve => setImmediate(resolve));
+  expect(readSubagentJSON(f.runtime.receiptFile).version).toBe('99.4.0');
   expect(launch[1]).toEqual(['-remote-debugging-pipe']);
   expect(launch[2].stdio).toEqual(['ignore', 'ignore', 'ignore', 'pipe', 'pipe']);
   expect(launch[2].env.KIMI_WORK_TRANSLATION_API_KEY).toBeUndefined();

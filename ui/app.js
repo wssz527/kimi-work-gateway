@@ -15,6 +15,9 @@ const MODEL_ALIAS_PREFIXES = ['byok-kth-kimi/', 'byok-kth-resp/'];
 const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const ENV_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost', '::1']);
+const UPDATE_ACTIONS = new Set(['check-update', 'install-update', 'rollback-update']);
+const UPDATE_RELEASE_PREFIX = 'https://github.com/wssz527/kimi-work-gateway/releases/tag/';
+const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 const VIEW_COPY = {
   overview: { title: '概览', lede: '网关、配置与子代理目标此刻的真实状态。' },
@@ -34,6 +37,9 @@ const ACTION_LABEL = {
   'check-compat': '兼容性检查',
   'launch-translated-kimi': '从网关启动 Kimi',
   'check-translation': '检查翻译状态',
+  'check-update': '检查更新',
+  'install-update': '下载并更新',
+  'rollback-update': '回退版本',
 };
 
 const ACTION_STATE = {
@@ -50,6 +56,11 @@ const ACTION_STATE = {
   unverified: '未验证',
   failed: '失败',
   interrupted: '已中断',
+  'not-checked': '尚未检查',
+  checking: '正在检查',
+  current: '已是最新',
+  available: '有新版本',
+  staged: '已下载，待重启',
 };
 
 const CONFIG_STATE = {
@@ -79,6 +90,40 @@ const DIAG_REASON = {
   probe_failed: '兼容检查未能执行。',
 };
 
+const UPDATE_STATE = {
+  'not-checked': { tone: 'neutral', word: '尚未检查', note: '还没有检查过更新。点击「检查更新」读取最新正式发布。' },
+  checking: { tone: 'warn', word: '正在检查', note: '正在读取 GitHub 上的正式发布。' },
+  current: { tone: 'ok', word: '已是最新', note: '当前运行的就是最新稳定版本。' },
+  available: { tone: 'warn', word: '有新版本', note: '发现可用的稳定版本。下载后需要重启网关才会运行新版本。' },
+  staged: { tone: 'warn', word: '已下载，待重启', note: '新版本已下载完成；重启网关后才会生效，当前运行版本不变。' },
+  failed: { tone: 'bad', word: '失败', note: '上一次更新操作没有完成，请查看原因后重试。' },
+};
+
+const UPDATE_REASON = {
+  update_network: '无法连接 GitHub，可能是离线、代理或防火墙拦截。',
+  update_timeout: '连接 GitHub 超时，请稍后重试。',
+  update_http_error: 'GitHub 返回了错误状态，稍后再试或手动查看发布页。',
+  update_rate_limited: 'GitHub 限制了请求频率，请稍后重试。',
+  update_release_invalid: 'GitHub 返回的发布信息格式不被接受，未采用其中的任何数据。',
+  update_no_release: '没有找到正式发布版本。',
+  update_archive_missing: '发布中没有可用的安装包。',
+  update_archive_invalid: '安装包校验失败，未安装。',
+  update_download_failed: '安装包下载失败，未安装。',
+  update_install_failed: '安装包写入失败，当前版本保持不变。',
+  update_unsupported_platform: '当前系统或安装方式不支持从面板更新。',
+  update_not_available: '没有可安装的新版本，请先检查更新。',
+  update_busy: '另一个更新操作正在进行。',
+  update_staged_mismatch: '待重启的版本与当前记录不一致，请重新检查更新。',
+  update_no_rollback: '没有可回退的旧版本。',
+  update_rollback_failed: '回退失败，当前版本保持不变。',
+  update_unknown: '更新操作未能完成，请查看网关日志。',
+};
+
+function updateReasonText(code) {
+  if (typeof code !== 'string' || !code) return '';
+  return UPDATE_REASON[code] || UPDATE_REASON['update_' + code] || code;
+}
+
 const TRANSLATION_STATE = {
   disabled: { tone: 'neutral', word: '已关闭', note: '翻译在设置中关闭；Kimi 的思考保持原文。' },
   'not-started': { tone: 'neutral', word: '未启动', note: '还没有通过网关启动带翻译的 Kimi。' },
@@ -87,7 +132,7 @@ const TRANSLATION_STATE = {
   active: { tone: 'ok', word: '已注入', note: 'Kimi 已确认翻译引擎在运行。' },
   inactive: { tone: 'warn', word: '未生效', note: '翻译已配置，但当前 Kimi 窗口没有运行翻译引擎。' },
   'waiting-kimi-exit': { tone: 'warn', word: '等待 Kimi 退出', note: 'Kimi 仍在运行。请正常退出 Kimi，再从网关启动；本面板不会强制结束它。' },
-  incompatible: { tone: 'bad', word: '不兼容', note: '当前 Kimi 版本或界面不支持注入翻译。' },
+  incompatible: { tone: 'bad', word: '不兼容', note: '当前 Kimi 的渲染入口或页面结构不兼容，无法注入翻译。' },
   failed: { tone: 'bad', word: '失败', note: '翻译注入未能完成，请查看原因后重试。' },
   stale: { tone: 'warn', word: '状态过期', note: '上一次注入的确认已过期，需要重新检查或重新启动。' },
   'pending-settings': { tone: 'warn', word: '正在应用', note: '翻译设置已保存，等待现有会话确认；无需重启推理网关。' },
@@ -130,7 +175,7 @@ const ERROR_HINT = {
   translation_config_unavailable: '翻译配置当前不可用，无法启动。',
   translation_kimi_running: 'Kimi 已在运行。请正常退出 Kimi 后从网关启动；本面板不会强制结束它。',
   translation_runtime_unavailable: '翻译运行时不可用，请检查本机 Kimi 副本。',
-  translation_incompatible: '当前 Kimi 版本或界面不支持注入翻译。',
+  translation_incompatible: '未找到可注入的 Kimi 渲染入口，或页面结构与翻译引擎不匹配。',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -284,6 +329,23 @@ const dom = {
   diagCompatDot: $('diag-compat-dot'),
   diagCompatState: $('diag-compat-state'),
   diagCompatMeta: $('diag-compat-meta'),
+
+  updUnavailable: $('upd-unavailable'),
+  updCurrent: $('upd-current'),
+  updCurrentSub: $('upd-current-sub'),
+  updLatest: $('upd-latest'),
+  updLatestSub: $('upd-latest-sub'),
+  updChecked: $('upd-checked'),
+  updCheckedSub: $('upd-checked-sub'),
+  updRelease: $('upd-release'),
+  updPending: $('upd-pending'),
+  updVerdictDot: $('upd-verdict-dot'),
+  updVerdictWord: $('upd-verdict-word'),
+  updVerdictNote: $('upd-verdict-note'),
+  updCheck: $('upd-check'),
+  updInstall: $('upd-install'),
+  updRollback: $('upd-rollback'),
+  updHint: $('upd-hint'),
 
   trUnavailable: $('tr-unavailable'),
   trForm: $('tr-form'),
@@ -1148,12 +1210,15 @@ function isInFlight(op) {
 }
 
 function operationNote(op) {
-  const reason = op && typeof op.reason === 'string' && op.reason ? reasonText(op.reason) : '';
   if (op && op.state === 'waiting-kimi-exit') {
     const launch = op.action === 'launch-translated-kimi' ? '「从网关启动 Kimi」' : '「启动 Kimi」';
     return 'Kimi 已在运行。请正常退出 Kimi，再点一次' + launch + '；本面板不会强制结束它。';
   }
-  return reason;
+  const code = op && typeof op.reason === 'string' && op.reason ? op.reason : '';
+  if (!code) return '';
+  /* 更新操作的原因是 update_* 代码，与诊断原因表不共享命名空间。 */
+  if (UPDATE_ACTIONS.has(op.action) || code.startsWith('update_')) return updateReasonText(code);
+  return reasonText(code);
 }
 
 function renderOperation(data) {
@@ -1182,6 +1247,8 @@ function renderActions(data) {
   const launch = translationLaunchState(data, { dirty: translationDirty });
   for (const button of actionButtons) {
     const action = button.dataset.action;
+    /* 更新按钮的可安装判断依赖 updates 与待重启版本，交给 renderUpdateButtons 统一处理。 */
+    if (UPDATE_ACTIONS.has(action)) continue;
     const needsReady = action === 'prepare-runtime' || action === 'launch-kimi';
     const isTranslation = action === 'launch-translated-kimi' || action === 'check-translation';
     const pending = state.pendingAction === action;
@@ -1773,6 +1840,7 @@ function renderConnection() {
   }
   setText(dom.restartFile, (config.file || '—') + ' · 修订 ' + shortRev(data.revision));
 
+  renderUpdates(data);
   renderDiagnostics(data);
 }
 
@@ -1805,6 +1873,181 @@ function renderPendingDiff(active, saved) {
     list.append(dt, dd);
   });
   dom.pendingDiff.replaceChildren(title, list);
+}
+
+/* ---------- render: updates ---------- */
+
+function updatePayload(data) {
+  const value = data && data.updates;
+  return value && typeof value === 'object' ? value : null;
+}
+
+function updatesAvailable(data) {
+  return updatePayload(data) !== null;
+}
+
+function versionText(value) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  /* 仓库标签带 v 前缀，接口字段按契约是裸 semver；两种写法都归一后比较。 */
+  const bare = /^[vV]/.test(text) ? text.slice(1) : text;
+  return SEMVER_PATTERN.test(bare) ? bare : '';
+}
+
+function releaseURLFor(payload) {
+  const candidate = payload && typeof payload.releaseURL === 'string' ? payload.releaseURL.trim() : '';
+  if (!candidate.startsWith(UPDATE_RELEASE_PREFIX)) return null;
+  const tail = candidate.slice(UPDATE_RELEASE_PREFIX.length);
+  /* 只接受单段合法 semver（允许仓库惯例的 v 前缀），拒绝额外路径、查询参数与片段。 */
+  const tag = /^[vV]/.test(tail) ? tail.slice(1) : tail;
+  if (!tag || tail.includes('/') || !SEMVER_PATTERN.test(tag)) return null;
+  return UPDATE_RELEASE_PREFIX + tail;
+}
+
+function updateStateWord(state) {
+  return UPDATE_STATE[state] || { tone: 'neutral', word: state || '未知', note: '' };
+}
+
+function evaluateUpdate(data) {
+  const payload = updatePayload(data);
+  if (!payload) {
+    return {
+      tone: 'neutral',
+      word: '版本未知',
+      note: '当前面板服务没有提供更新状态，无法确认运行版本或安装新版本。',
+      current: '',
+      latest: '',
+      pending: '',
+      state: null,
+    };
+  }
+  const state = typeof payload.state === 'string' ? payload.state : 'not-checked';
+  const info = updateStateWord(state);
+  const current = versionText(payload.currentVersion);
+  const latest = versionText(payload.latestVersion);
+  const pending = versionText(payload.pendingVersion);
+  const reason = updateReasonText(payload.reason);
+  let note = info.note;
+  if (state === 'failed') note = reason || info.note;
+  else if (state === 'staged' && pending) note = '版本 ' + pending + ' 已下载；重启网关后才会生效，当前运行版本不变。';
+  else if (state === 'available' && latest) note = '版本 ' + latest + ' 可以下载；下载后需重启网关才会生效。';
+  else if (reason && state !== 'current') note = reason;
+  return { tone: info.tone, word: info.word, note, state, current, latest, pending };
+}
+
+function renderUpdates(data) {
+  const payload = updatePayload(data);
+  const available = payload !== null;
+  setHidden(dom.updUnavailable, available);
+
+  if (!available) {
+    setText(dom.updCurrent, '当前版本未知');
+    setText(dom.updCurrentSub, '面板服务没有提供更新状态。');
+    setText(dom.updLatest, '—');
+    setText(dom.updLatestSub, '无法读取发布信息。');
+    setText(dom.updChecked, '—');
+    setText(dom.updCheckedSub, '尚未检查。');
+    setText(dom.updRelease, '仅使用 GitHub Releases 的正式发布。');
+    setHidden(dom.updPending, true);
+    setDot(dom.updVerdictDot, 'neutral');
+    setText(dom.updVerdictWord, '版本未知');
+    setText(dom.updVerdictNote, '无法确认运行版本；下载与回退不可用。');
+    setText(dom.updHint, '升级到提供更新状态的面板服务后，这里会显示当前版本与可用版本。');
+    renderUpdateButtons(data);
+    return;
+  }
+
+  const verdict = evaluateUpdate(data);
+  const current = verdict.current;
+  const latest = verdict.latest;
+
+  setText(dom.updCurrent, current || '未知');
+  setText(dom.updCurrentSub, current
+    ? '本机正在运行的网关版本'
+    : '面板服务未报告当前版本。');
+  setText(dom.updLatest, latest || '未获取');
+  const latestRaw = typeof payload.latestVersion === 'string' ? payload.latestVersion.trim() : '';
+  setText(dom.updLatestSub, latest
+    ? (current && latest === current ? '与运行版本相同' : 'GitHub 上的最新正式发布')
+    : (latestRaw
+      ? '返回的版本号格式不被接受，已忽略'
+      : (verdict.state === 'checking' ? '正在读取…' : '检查后显示')));
+
+  const checkedAt = payload.checkedAt;
+  setText(dom.updChecked, checkedAt === null || checkedAt === undefined ? '—' : fmtTime(checkedAt));
+  setText(dom.updCheckedSub, checkedAt === null || checkedAt === undefined
+    ? '本次进程还没有检查过'
+    : '最近一次检查完成的时间');
+
+  const link = releaseURLFor(payload);
+  if (link && dom.updRelease) {
+    const anchor = document.createElement('a');
+    anchor.className = 'mono upd__link';
+    anchor.href = link;
+    anchor.textContent = '查看发布页';
+    anchor.rel = 'noreferrer noopener';
+    anchor.target = '_blank';
+    dom.updRelease.replaceChildren(anchor);
+  } else if (dom.updRelease) {
+    const note = document.createElement('span');
+    note.textContent = '仅使用 GitHub Releases 的正式发布。';
+    dom.updRelease.replaceChildren(note);
+  }
+
+  const pending = verdict.pending;
+  if (pending) {
+    setHidden(dom.updPending, false);
+    setText(dom.updPending, '版本 ' + pending + ' 已下载，等待重启网关。重启前仍运行版本 '
+      + (current || '未知') + '，正在进行的会话不会被结束。');
+  } else {
+    setHidden(dom.updPending, true);
+  }
+
+  setDot(dom.updVerdictDot, verdict.tone);
+  setText(dom.updVerdictWord, verdict.word);
+  setText(dom.updVerdictNote, verdict.note);
+  setText(dom.updHint, updateHint(data, verdict));
+  renderUpdateButtons(data);
+}
+
+function updateHint(data, verdict) {
+  if (!updatesAvailable(data)) return '升级到提供更新状态的面板服务后，这里会显示当前版本与可用版本。';
+  if (verdict.state === 'staged') return '重启网关后新版本才会运行；本面板不会自动重启。';
+  if (verdict.state === 'available') return '下载不会结束正在运行的会话；重启网关后才切换到新版本。';
+  if (verdict.state === 'checking') return '检查只读取 GitHub 的正式发布信息，不下载安装包。';
+  if (verdict.state === 'failed') return '失败不会改变正在运行的版本；可重试或到 GitHub 手动下载。';
+  if (verdict.state === 'current') return '当前已是最新稳定版本；需要时可再次检查，或回退到更早的版本。';
+  return '检查、下载与回退都需要点击；本面板不会静默升级。';
+}
+
+function renderUpdateButtons(data) {
+  const payload = updatePayload(data);
+  const running = payload ? payload.state === 'checking' : false;
+  const opRunning = isInFlight(data && data.operation);
+  const pending = state.pendingAction;
+  const idle = Boolean(payload) && !running && !opRunning && !pending;
+  const current = payload ? versionText(payload.currentVersion) : '';
+  const latest = payload ? versionText(payload.latestVersion) : '';
+  const pendingVersion = payload ? versionText(payload.pendingVersion) : '';
+  const canRollback = Boolean(payload) && Boolean(versionText(payload.rollbackVersion));
+
+  if (dom.updCheck) {
+    dom.updCheck.disabled = !payload || running || opRunning;
+  }
+  if (dom.updInstall) {
+    const upgradable = Boolean(payload) && !pendingVersion && Boolean(latest) && latest !== current;
+    dom.updInstall.disabled = !idle || !upgradable;
+  }
+  if (dom.updRollback) {
+    dom.updRollback.disabled = !idle || !canRollback;
+  }
+
+  [[dom.updCheck, 'check-update'], [dom.updInstall, 'install-update'], [dom.updRollback, 'rollback-update']]
+    .forEach(([button, action]) => {
+      if (!button) return;
+      const busy = pending === action;
+      button.classList.toggle('is-busy', busy);
+      button.setAttribute('aria-busy', busy ? 'true' : 'false');
+    });
 }
 
 function renderDiagnostics(data) {
@@ -1854,7 +2097,9 @@ const TRANSLATION_REASON = {
   'kimi-running': 'Kimi 已在运行，需要正常退出后再从网关启动。',
   'kimi-exited': 'Kimi 已退出，翻译引擎随之停止。',
   'renderer-missing': '没有找到可注入的 Kimi 渲染窗口。',
-  'version-unsupported': '当前 Kimi 版本不支持翻译注入。',
+  'version-unsupported': '没有找到可注入的 Kimi 渲染入口，或页面结构与翻译引擎不匹配。',
+  translation_runtime_incompatible: '没有找到可注入的 Kimi 渲染入口，或页面结构与翻译引擎不匹配。',
+  translation_kimi_unavailable: '无法读取本机 Kimi 运行时，请检查安装或本机副本。',
   'engine-inactive': 'Kimi 窗口已连接，但翻译引擎没有运行。',
   'legacy-engine': '检测到旧版翻译注入，未重复挂载。',
   'settings-pending': '设置已保存，等待下次从网关启动时采用。',
@@ -2255,9 +2500,34 @@ async function runAction(action) {
     showToast('面板服务未提供翻译状态，无法检查。', 'error');
     return;
   }
+  if (action === 'check-update' && !updatesAvailable(data)) {
+    showToast('面板服务未提供更新状态，无法检查更新。', 'error');
+    return;
+  }
+  if (action === 'install-update' || action === 'rollback-update') {
+    const payload = updatePayload(data);
+    if (!payload) {
+      showToast('面板服务未提供更新状态，无法安装或回退。', 'error');
+      return;
+    }
+    const latest = versionText(payload.latestVersion);
+    const current = versionText(payload.currentVersion);
+    const staged = versionText(payload.pendingVersion);
+    if (action === 'install-update' && (!latest || staged || latest === current)) {
+      showToast(staged
+        ? '版本 ' + staged + ' 已下载，请重启网关；重复下载不会改变已暂存的版本。'
+        : '没有可安装的新版本，请先点「检查更新」。', 'error');
+      return;
+    }
+    if (action === 'rollback-update' && !versionText(payload.rollbackVersion)) {
+      showToast('没有可回退的旧版本。', 'error');
+      return;
+    }
+  }
 
   state.pendingAction = action;
   renderActions(data);
+  renderUpdateButtons(data);
 
   try {
     const res = await request(API.actions, { method: 'POST', body: { id: actionUUID(), at: Date.now(), action } });
@@ -2268,14 +2538,21 @@ async function runAction(action) {
       adoptState({ ...state.data, operation: op });
       renderOperation(state.data);
       renderActions(state.data);
+      renderUpdateButtons(state.data);
     }
     const submitted = action === 'launch-translated-kimi'
       ? '启动请求已被接受，注入结果以运行时状态为准。'
       : action === 'check-translation'
         ? '检查请求已提交，等待运行时返回结果。'
-        : action === 'launch-kimi'
-          ? '启动请求已提交，等待运行时状态。'
-          : '操作已提交，等待结果。';
+        : action === 'check-update'
+          ? '检查更新已提交，正在读取 GitHub 上的正式发布。'
+          : action === 'install-update'
+            ? '下载请求已提交；下载完成后重启网关才会生效。'
+            : action === 'rollback-update'
+              ? '回退请求已提交；重启网关后运行回退前的版本。'
+              : action === 'launch-kimi'
+                ? '启动请求已提交，等待运行时状态。'
+                : '操作已提交，等待结果。';
     showToast(submitted, 'ok');
     /* 终态由 settlePending 在轮询读取到匹配 operation 时确认，避免重复提示。 */
     await loadState({ silent: true });
@@ -2301,7 +2578,10 @@ async function runAction(action) {
     await loadState({ silent: true });
   } finally {
     if (state.pendingAction === action) state.pendingAction = null;
-    if (state.data) renderActions(state.data);
+    if (state.data) {
+      renderActions(state.data);
+      renderUpdateButtons(state.data);
+    }
   }
 }
 
@@ -2349,7 +2629,8 @@ async function confirmActionResult(action, opId) {
       return;
     }
     if (failed || runtime.state === 'failed' || runtime.state === 'incompatible') {
-      showToast('翻译未注入：' + (translationReason(runtime.reason) || info.word || '注入未完成') + '。', 'error');
+      const detail = translationReason(runtime.reason) || info.word || '注入未完成';
+      showToast('翻译未注入：' + detail.replace(/。$/, '') + '。', 'error');
       return;
     }
     if (op.state === 'starting' || op.state === 'attaching') {
@@ -2357,6 +2638,34 @@ async function confirmActionResult(action, opId) {
       return;
     }
     showToast('翻译状态：' + (info.word || '未知') + '（注入尚未确认）。', 'error');
+    return;
+  }
+
+  if (action === 'check-update' || action === 'install-update' || action === 'rollback-update') {
+    const payload = updatePayload(state.data) || {};
+    const reason = updateReasonText(op.reason).replace(/[。；]+$/, '');
+    if (failed) {
+      showToast((ACTION_LABEL[action] || action) + '未完成：' + (reason || '更新服务未返回原因') + '。', 'error');
+      return;
+    }
+    if (action === 'check-update') {
+      const latest = versionText(payload.latestVersion);
+      const current = versionText(payload.currentVersion);
+      if (latest && current && latest !== current) showToast('发现新版本 ' + latest + '（当前 ' + current + '）。', 'ok');
+      else if (latest) showToast('已是最新版本 ' + latest + '。', 'ok');
+      else showToast('检查已完成，未读到可比较的稳定版本。', 'ok');
+      return;
+    }
+    const pending = versionText(payload.pendingVersion);
+    if (pending) {
+      showToast('版本 ' + pending + ' 已准备好，重启网关后生效；当前会话不受影响。', 'ok');
+      return;
+    }
+    if (action === 'rollback-update') {
+      showToast('回退已完成；重启网关后运行回退前的版本。', 'ok');
+      return;
+    }
+    showToast('更新已提交，但状态里还没有待重启的版本；请刷新后再确认。', 'error');
     return;
   }
 

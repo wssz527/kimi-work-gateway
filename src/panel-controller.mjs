@@ -11,9 +11,10 @@ import { inspect as inspectKimiContract } from './kimi-contract.mjs';
 import { checkUpstream, connectionFields, validateConnection, validatePanelModels } from './panel-settings.mjs';
 import { normalizeTranslationConfig } from './translation-config.mjs';
 import { TranslationRuntime } from './translation-runtime.mjs';
+import { GatewayUpdater, gatewayUpdateDirectory } from './update-manager.mjs';
 
 const ACTIONS = new Set(['prepare-runtime', 'launch-kimi', 'prepare-native', 'remove-dns', 'copy-token', 'check-upstream', 'check-compat',
-  'launch-translated-kimi', 'check-translation']);
+  'launch-translated-kimi', 'check-translation', 'check-update', 'install-update', 'rollback-update']);
 const MODEL_FIELDS = new Set(['id', 'name', 'protocol', 'contextWindow', 'maxOutputTokens', 'tools', 'reasoning', 'inputModalities', 'reasoningEfforts', 'defaultEffort']);
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const base = config => ({ ...connectionFields(config), models: config.models, translation: normalizeTranslationConfig(config.translation) });
@@ -29,7 +30,7 @@ export class PanelError extends Error {
 export class PanelController {
   constructor({ configFile, config, gateway, backend, stateDir, kimiDir, policy,
     runtime, setup, probe, copyToken = copySetupToken, onPolicy, env = process.env,
-    inspectContract = inspectKimiContract, translationRuntime } = {}) {
+    inspectContract = inspectKimiContract, translationRuntime, updater } = {}) {
     this.configFile = path.resolve(configFile);
     this.config = config;
     this.baseHash = digest(base(config));
@@ -41,6 +42,7 @@ export class PanelController {
     this.setup = setup || new NativeSetup({ stateDir, flagFile: nativeFlagFile(kimiDir) });
     this.probe = probe || new NativeSetupProbe({ flagFile: nativeFlagFile(kimiDir) });
     this.translation = translationRuntime || new TranslationRuntime({ stateDir, kimiDir, env });
+    this.updater = updater || new GatewayUpdater({ updateDir: gatewayUpdateDirectory(env) });
     try { this.translation.configure(config.translation); }
     catch { this.translationError = 'translation_settings_conflict'; }
     this.copyToken = copyToken;
@@ -127,7 +129,13 @@ export class PanelController {
     const translationRuntime = Object.fromEntries(['state', 'version', 'reason']
       .filter(field => typeof translationStatus?.[field] === 'string').map(field => [field, translationStatus[field]]));
     if (Number.isInteger(translationStatus?.pid)) translationRuntime.pid = translationStatus.pid;
-    return { schemaVersion: 1, revision: current?.revision ?? null,
+    const compatibility = this.runtimeStatus?.compatibility;
+    if (compatibility && ['structural', 'existing'].includes(compatibility.strategy)
+      && Number.isInteger(compatibility.adapterVersion)) runtime.compatibility = { ...compatibility };
+    let updates;
+    try { updates = this.updater.inspect(); }
+    catch { updates = { currentVersion: 'unknown', state: 'failed', reason: 'update_state_invalid' }; }
+    return { schemaVersion: 1, updates, revision: current?.revision ?? null,
       configuration: { state: current ? (current.compatible ? 'ready' : 'changed') : 'unavailable', file: path.basename(this.configFile) },
       gateway: { state: this.gateway.server ? 'running' : 'stopped', url: this.gateway.url,
         modelCount: this.backend.models.length, activeRequests: this.gateway.inflight.size },
@@ -274,7 +282,10 @@ export class PanelController {
         let result;
         try {
           this.ownedPolicy();
-          if (input.action === 'check-upstream' || input.action === 'check-compat') result = await this.diagnose(input.action);
+          if (input.action === 'check-update') result = await this.updater.check();
+          else if (input.action === 'install-update') result = await this.updater.install();
+          else if (input.action === 'rollback-update') result = await this.updater.rollback();
+          else if (input.action === 'check-upstream' || input.action === 'check-compat') result = await this.diagnose(input.action);
           else if (input.action === 'prepare-runtime') result = this.runtime.prepare();
           else if (input.action === 'launch-translated-kimi') result = await this.launchTranslation();
           else if (input.action === 'check-translation') result = this.translation.check();

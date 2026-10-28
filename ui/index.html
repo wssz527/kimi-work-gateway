@@ -570,6 +570,59 @@
         <p class="mono restart__file" id="restart-file">—</p>
       </div>
 
+      <div class="panel" id="update-panel">
+        <div class="panel__head">
+          <h2>网关版本</h2>
+          <p>只读取 GitHub 上的正式发布；检查、下载和回退都需要你在这里点击，下载完成后重启网关才会生效。</p>
+        </div>
+
+        <p class="note note--warn" id="upd-unavailable" hidden>当前面板服务没有提供更新状态，无法确认或安装新版本。页面其余功能不受影响。</p>
+
+        <dl class="facts facts--compact">
+          <div class="fact">
+            <dt>当前运行版本</dt>
+            <dd class="mono" id="upd-current">—</dd>
+            <p class="fact__sub" id="upd-current-sub">读取中…</p>
+          </div>
+          <div class="fact">
+            <dt>最新稳定版本</dt>
+            <dd class="mono" id="upd-latest">—</dd>
+            <p class="fact__sub" id="upd-latest-sub">读取中…</p>
+          </div>
+          <div class="fact">
+            <dt>最近检查</dt>
+            <dd class="mono" id="upd-checked">—</dd>
+            <p class="fact__sub" id="upd-checked-sub">读取中…</p>
+          </div>
+          <div class="fact">
+            <dt>更新来源</dt>
+            <dd>GitHub</dd>
+            <p class="fact__sub" id="upd-release">仅使用 GitHub Releases 的正式发布。</p>
+          </div>
+        </dl>
+
+        <p class="note note--warn" id="upd-pending" hidden></p>
+
+        <p class="verdict" id="upd-verdict">
+          <span class="dot" id="upd-verdict-dot" data-tone="neutral"></span>
+          <strong id="upd-verdict-word">读取中</strong>
+          <span class="verdict__note" id="upd-verdict-note"></span>
+        </p>
+
+        <div class="panel__actions">
+          <button class="btn btn--outline" id="upd-check" type="button" data-action="check-update">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>检查更新
+          </button>
+          <button class="btn btn--primary" id="upd-install" type="button" data-action="install-update">
+            <svg class="icon" aria-hidden="true"><use href="#i-box"/></svg>下载并更新
+          </button>
+          <button class="btn btn--outline" id="upd-rollback" type="button" data-action="rollback-update">回退到旧版本</button>
+        </div>
+
+        <p class="hint" id="upd-hint">—</p>
+        <p class="hint">本面板不会自动检查、下载或安装更新；下载完成后不会结束正在运行的会话，重启网关后才运行新版本。</p>
+      </div>
+
       <div class="panel">
         <div class="panel__head">
           <h2>诊断</h2>

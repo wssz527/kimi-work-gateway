@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readSubagentJSON, writeSubagentJSON } from './subagent-policy.mjs';
-import { readTranslationSettings, translationAlive, TRANSLATION_KIMI_VERSIONS } from './translation-runtime.mjs';
+import { readTranslationSettings, translationAlive } from './translation-runtime.mjs';
 import { TranslationPipe } from './translation-pipe.mjs';
 import { translateReasoning } from './translation-service.mjs';
 
@@ -190,7 +190,8 @@ export class TranslationSession {
   async run() {
     this.request = readSubagentJSON(this.launchFile);
     if (this.request.schemaVersion !== 1 || this.request.id !== this.id || !path.isAbsolute(this.request.homeDir)
-      || !path.isAbsolute(this.request.application) || !TRANSLATION_KIMI_VERSIONS.has(this.request.version)
+      || !path.isAbsolute(this.request.application) || typeof this.request.version !== 'string'
+      || !this.request.version || this.request.version.length > 128 || /[\u0000-\u001f\u007f]/.test(this.request.version)
       || !translationAlive(this.request.pid)) throw Error('translation_launch_invalid');
     const desired = readTranslationSettings(this.settingsFile, this.request.homeDir);
     this.settings = desired.settings;

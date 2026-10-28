@@ -195,7 +195,7 @@ test('bundle archive links are refused before extraction can follow their target
   }
 });
 
-test('unknown source versions are refused and staging directories are removed', () => {
+test('unrecognised source structure is refused and staging directories are removed', () => {
   const { stateDir, root } = setup();
   const bundleDir = path.join(root, 'source');
   const kernel = path.join(bundleDir, 'app/daimon/dist/kimi-code-v2/kernel-bundle.mjs');

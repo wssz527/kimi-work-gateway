@@ -1325,6 +1325,25 @@ input[type="search"]::-webkit-search-cancel-button { display: none; }
 
 .diag .btn { justify-self: start; }
 
+/* ---------- updates ---------- */
+
+#update-panel .panel__actions { justify-content: flex-start; }
+
+.upd__link {
+  color: var(--blue);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.upd__link:hover { color: var(--blue-hover); }
+
+#upd-hint { color: var(--ink-3); }
+
+#update-panel #upd-pending {
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--rule));
+}
+
 .actions-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

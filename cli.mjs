@@ -34,6 +34,12 @@ const USAGE = [
   '      report the subagent policy and runtime state; changes nothing',
   '  subagents-launch [--state-dir <dir>] [--kimi-dir <dir>] [--archive <file>]',
   '      start Kimi on the adapted runtime copy; quit Kimi first',
+  '  check-update',
+  '      check the latest stable GitHub release without changing the running program',
+  '  update',
+  '      verify and stage the latest release; restart the gateway to use it',
+  '  rollback-update',
+  '      select the previous installed release for the next gateway start',
   '  help',
   '      show this text',
 ].join('\n');
@@ -395,6 +401,22 @@ function compatCommand(argv, env, io, overrides) {
   return COMPAT_EXIT[result.state] ?? 0;
 }
 
+async function updateCommand(command, argv, env, io, overrides) {
+  if (argv.length) return usageError(io, 'kimi-work-gateway: invalid arguments for ' + command);
+  try {
+    const { GatewayUpdater, gatewayUpdateDirectory } = await import('./src/update-manager.mjs');
+    const updater = new (overrides.GatewayUpdater || GatewayUpdater)({ updateDir: gatewayUpdateDirectory(env) });
+    const method = { 'check-update': 'check', update: 'install', 'rollback-update': 'rollback' }[command];
+    const result = await updater[method]();
+    io.out(JSON.stringify(result));
+    return result.state === 'failed' ? 3 : 0;
+  } catch (failure) {
+    const code = /^update_[a-z0-9_]{1,80}$/.test(failure?.message) ? failure.message : 'update_failed';
+    io.err('kimi-work-gateway: ' + command + ' failed (' + code + ')');
+    return 3;
+  }
+}
+
 export async function run(argv, env = process.env, io, overrides = {}) {
   const sink = streams(io);
   const [command, ...rest] = argv || [];
@@ -410,6 +432,9 @@ export async function run(argv, env = process.env, io, overrides = {}) {
     case 'subagents-prepare': return subagentCommand('prepare', rest, env, sink, overrides);
     case 'subagents-status': return subagentCommand('status', rest, env, sink, overrides);
     case 'subagents-launch': return subagentCommand('launch', rest, env, sink, overrides);
+    case 'check-update':
+    case 'update':
+    case 'rollback-update': return updateCommand(command, rest, env, sink, overrides);
     default: return usageError(sink, 'kimi-work-gateway: unknown command ' + command);
   }
 }

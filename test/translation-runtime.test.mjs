@@ -114,10 +114,28 @@ test('a running translation session cannot bypass a new force policy or pretend 
   expect(calls).toHaveLength(0);
 });
 
-test('installation checking reports incompatible versions without starting a process', () => {
+test('installation checking reports actual probe failures without starting a process', () => {
   const { runtime, calls } = fixture({ locate: () => { throw Error('translation_runtime_incompatible'); } });
   expect(runtime.check()).toEqual({ state: 'incompatible', reason: 'translation_runtime_incompatible' });
   expect(calls).toHaveLength(0);
+});
+
+test('translation installation treats new and unknown version metadata as informational', () => {
+  const f = fixture();
+  const archive = path.join(f.dir, 'Contents', 'Resources', 'app.asar');
+  const application = path.join(f.dir, 'Contents', 'MacOS', 'Kimi');
+  const metadata = path.join(f.dir, 'Contents', 'Info.plist');
+  fs.mkdirSync(path.dirname(archive), { recursive: true });
+  fs.mkdirSync(path.dirname(application), { recursive: true });
+  fs.writeFileSync(archive, 'synthetic archive without an embedded package');
+  fs.writeFileSync(application, 'synthetic executable, never launched');
+  fs.writeFileSync(metadata, '<key>CFBundleShortVersionString</key><string>99.4.0</string>');
+  const runtime = new TranslationRuntime({ stateDir: f.dir, kimiDir: f.runtime.homeDir,
+    installation: { archive, application, platform: 'darwin' } });
+  runtime.configure({ enabled: true });
+  expect(runtime.check()).toEqual({ state: 'not-started', version: '99.4.0' });
+  fs.unlinkSync(metadata);
+  expect(runtime.check()).toEqual({ state: 'not-started', version: 'unknown' });
 });
 
 test('private CDP pipe handles split UTF-8, events, errors and bounded pending calls', async () => {
