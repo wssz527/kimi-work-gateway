@@ -7,10 +7,13 @@ import { NativeSetup } from './native-setup.mjs';
 import { NativeSetupProbe } from './native-status.mjs';
 import { copySetupToken } from './native-clipboard.mjs';
 import { nativeFlagFile } from './paths.mjs';
+import { inspect as inspectKimiContract } from './kimi-contract.mjs';
+import { checkUpstream, connectionFields, validateConnection, validatePanelModels } from './panel-settings.mjs';
 
-const ACTIONS = new Set(['prepare-runtime', 'launch-kimi', 'prepare-native', 'remove-dns', 'copy-token']);
+const ACTIONS = new Set(['prepare-runtime', 'launch-kimi', 'prepare-native', 'remove-dns', 'copy-token', 'check-upstream', 'check-compat']);
+const MODEL_FIELDS = new Set(['id', 'name', 'protocol', 'contextWindow', 'maxOutputTokens', 'tools', 'reasoning', 'inputModalities', 'reasoningEfforts', 'defaultEffort']);
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const base = config => ({ upstream: config.upstream, tokenEnv: config.tokenEnv, port: config.port, dns: config.dns, models: config.models });
+const base = config => ({ ...connectionFields(config), models: config.models });
 const reason = error => /^[a-z][a-z0-9_-]{0,100}$/.test(error?.message) ? error.message : 'panel_operation_failed';
 const summarize = value => ({ mode: value.mode,
   ...(value.mode === 'force' ? { model: value.model, modelAlias: value.modelAlias, ...(value.effort === undefined ? {} : { effort: value.effort }) } : {}),
@@ -22,7 +25,8 @@ export class PanelError extends Error {
 
 export class PanelController {
   constructor({ configFile, config, gateway, backend, stateDir, kimiDir, policy,
-    runtime, setup, probe, copyToken = copySetupToken, onPolicy } = {}) {
+    runtime, setup, probe, copyToken = copySetupToken, onPolicy, env = process.env,
+    inspectContract = inspectKimiContract } = {}) {
     this.configFile = path.resolve(configFile);
     this.config = config;
     this.baseHash = digest(base(config));
@@ -35,6 +39,9 @@ export class PanelController {
     this.probe = probe || new NativeSetupProbe({ flagFile: nativeFlagFile(kimiDir) });
     this.copyToken = copyToken;
     this.onPolicy = onPolicy;
+    this.env = env;
+    this.inspectContract = inspectContract;
+    this.diagnostics = {};
     this.receiptFile = path.join(stateDir, 'panel-operation-receipt.json');
     this.tail = Promise.resolve();
     this.operation = null;
@@ -45,6 +52,21 @@ export class PanelController {
     const document = readSubagentJSON(this.configFile);
     const config = readConfig(document);
     return { document, config, revision: digest(document), compatible: this.baseHash === digest(base(config)) };
+  }
+
+  currentConfiguration(input, { allowPending = false } = {}) {
+    if (this.operationTask) throw new PanelError('panel_action_busy', 409);
+    let current;
+    try { current = this.readConfiguration(); } catch { throw new PanelError('configuration_unavailable', 409); }
+    if (!allowPending && !current.compatible) throw new PanelError('configuration_changed', 409);
+    if (typeof input?.revision !== 'string' || input.revision !== current.revision) throw new PanelError('configuration_conflict', 409);
+    this.ownedPolicy();
+    return current;
+  }
+
+  persist(current, document) {
+    if (digest(readSubagentJSON(this.configFile)) !== current.revision) throw new PanelError('configuration_conflict', 409);
+    writeSubagentJSON(this.configFile, document);
   }
 
   serialize(work) {
@@ -90,28 +112,28 @@ export class PanelController {
     if (typeof lastSpawn?.modelAlias === 'string' && Number.isFinite(lastSpawn.at)) {
       runtime.lastSpawn = { modelAlias: lastSpawn.modelAlias, at: lastSpawn.at };
     }
+    const saved = current ? connectionFields(current.config) : null;
+    const active = connectionFields(this.config);
     return { schemaVersion: 1, revision: current?.revision ?? null,
       configuration: { state: current ? (current.compatible ? 'ready' : 'changed') : 'unavailable', file: path.basename(this.configFile) },
       gateway: { state: this.gateway.server ? 'running' : 'stopped', url: this.gateway.url,
         modelCount: this.backend.models.length, activeRequests: this.gateway.inflight.size },
       models: this.backend.models.map(model => ({ ...model })),
       subagents: { configured: summarize(configured), policy, runtime },
+      connection: { active, saved, environment: { apiKeySet: Boolean(this.env[saved?.upstream.apiKeyEnv || active.upstream.apiKeyEnv]),
+        tokenSet: Boolean(this.env[saved?.tokenEnv || active.tokenEnv]) } },
+      metrics: structuredClone(this.gateway.metrics), diagnostics: structuredClone(this.diagnostics),
       setup, operation: this.operation ? { ...this.operation } : null };
   }
 
   async apply(input) {
     await this.serialize(async () => {
       if (!input || !['inherit', 'force'].includes(input.mode)) throw new PanelError('invalid_subagent_policy');
-      let current;
-      try { current = this.readConfiguration(); } catch { throw new PanelError('configuration_unavailable', 409); }
-      if (!current.compatible) throw new PanelError('configuration_changed', 409);
-      if (typeof input.revision !== 'string' || input.revision !== current.revision) throw new PanelError('configuration_conflict', 409);
+      const current = this.currentConfiguration(input);
       const desired = { mode: input.mode, ...(input.mode === 'force' ? { model: input.model,
         ...(input.effort == null ? {} : { effort: input.effort }) } : {}) };
       const normalized = normalizeSubagentPolicy(desired, this.backend.models);
-      this.ownedPolicy();
-      if (digest(readSubagentJSON(this.configFile)) !== current.revision) throw new PanelError('configuration_conflict', 409);
-      writeSubagentJSON(this.configFile, { ...current.document, subagents: desired });
+      this.persist(current, { ...current.document, subagents: desired });
       this.config = { ...this.config, subagents: normalized };
       try { this.policy.configure(desired, this.backend.models); }
       catch (error) {
@@ -122,6 +144,58 @@ export class PanelController {
       this.runtimeAfter = 0;
     });
     return this.state();
+  }
+
+  async saveModels(input) {
+    await this.serialize(async () => {
+      const current = this.currentConfiguration(input);
+      const models = validatePanelModels(input.models);
+      let normalized;
+      try { normalized = normalizeSubagentPolicy(current.document.subagents, models); }
+      catch { throw new PanelError('subagent_model_in_use', 409); }
+      const previous = new Map(current.document.models.map(row => [row.id, row]));
+      const stored = models.map(model => ({ ...Object.fromEntries(Object.entries(previous.get(model.id) || {})
+        .filter(([key]) => !MODEL_FIELDS.has(key))), ...model }));
+      this.persist(current, { ...current.document, models: stored });
+      this.backend.models = models;
+      this.gateway.models = models;
+      this.config = { ...this.config, models: stored, subagents: normalized };
+      this.baseHash = digest(base(this.config));
+      this.diagnostics.compat = undefined;
+      try { this.policy.configure(current.document.subagents, models); }
+      catch (error) { throw new PanelError('configuration_apply_failed', 503, { saved: true, reason: reason(error) }); }
+      this.onPolicy?.(normalized);
+      this.runtimeAfter = 0;
+    });
+    return this.state();
+  }
+
+  async saveConnection(input) {
+    await this.serialize(async () => {
+      const current = this.currentConfiguration(input, { allowPending: true });
+      const connection = validateConnection(input, current.document);
+      this.persist(current, { ...current.document, ...connection,
+        upstream: { ...current.document.upstream, ...connection.upstream },
+        dns: { ...current.document.dns, ...connection.dns } });
+    });
+    return this.state();
+  }
+
+  async diagnose(action) {
+    if (action === 'check-upstream') {
+      const result = await checkUpstream(this.backend);
+      this.diagnostics.upstream = result;
+      return result;
+    }
+    const result = await this.inspectContract({ models: this.backend.models });
+    const safe = { state: ['verified', 'incompatible', 'unavailable', 'unverified'].includes(result?.state) ? result.state : 'unverified',
+      at: Date.now(), modelCount: this.backend.models.length,
+      ...(typeof result?.version === 'string' ? { version: result.version } : {}),
+      ...(Array.isArray(result?.accepted) ? { acceptedCount: result.accepted.length } : {}),
+      ...(Array.isArray(result?.skipped) ? { skippedCount: result.skipped.length } : {}),
+      ...(typeof result?.reason === 'string' && /^[a-z][a-z0-9_-]{0,100}$/.test(result.reason) ? { reason: result.reason } : {}) };
+    this.diagnostics.compat = safe;
+    return safe;
   }
 
   async action(input) {
@@ -153,7 +227,8 @@ export class PanelController {
         let result;
         try {
           this.ownedPolicy();
-          if (input.action === 'prepare-runtime') result = this.runtime.prepare();
+          if (input.action === 'check-upstream' || input.action === 'check-compat') result = await this.diagnose(input.action);
+          else if (input.action === 'prepare-runtime') result = this.runtime.prepare();
           else if (input.action === 'launch-kimi') result = await this.runtime.launch();
           else if (input.action === 'copy-token') result = { state: await this.copyToken({ request: input,
             stateDir: this.stateDir, key: this.gateway.connection?.key }) };

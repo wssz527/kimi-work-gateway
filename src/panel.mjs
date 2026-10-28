@@ -22,6 +22,13 @@ const MESSAGES = {
   panel_action_busy: '上一次操作仍在执行，请等待结果。',
   panel_action_conflict: '操作标识已被使用，请刷新后重试。',
   panel_receipt_conflict: '操作记录有冲突，请检查状态目录。',
+  invalid_models: '模型声明无效，请检查 ID、上下文、能力及思考档位。',
+  protocol_conflict: '模型 ID 最后一段以 kimi- 开头时必须使用 Chat，其余必须使用 Responses。',
+  invalid_base_url: '上游地址需使用 HTTPS（本机可用 HTTP），且不能包含凭证、查询参数或片段。',
+  invalid_config: '配置无效，请检查端口和环境变量名称。',
+  invalid_connection_config: '连接配置不完整或包含不支持的字段。凭证请保存在环境变量中。',
+  subagent_model_in_use: '当前子代理仍使用此模型或思考档位，请先更改子代理目标，再修改模型能力。',
+  configuration_apply_failed: '模型目录已保存，但运行策略未能更新，请检查状态后重启。',
 };
 
 function authorized(actual, key) {
@@ -88,18 +95,20 @@ export class GatewayPanel {
       if (asset && ['GET', 'HEAD'].includes(req.method)) {
         res.writeHead(200, { 'Content-Type': asset.type }); res.end(req.method === 'HEAD' ? undefined : asset.content); return;
       }
-      if (!['/api/state', '/api/subagents', '/api/actions'].includes(req.url)) throw new PanelError('not_found', 404);
+      if (!['/api/state', '/api/subagents', '/api/actions', '/api/models', '/api/connection'].includes(req.url)) throw new PanelError('not_found', 404);
       if (!authorized(req.headers.authorization, this.key)) throw new PanelError('unauthorized', 401);
       if (req.method === 'GET' && req.url === '/api/state') { json(200, await this.controller.state()); return; }
       if (req.method !== 'POST' || req.url === '/api/state') throw new PanelError('method_not_allowed', 405);
       if (req.headers.origin !== this.url) throw new PanelError('origin_refused', 403);
       const input = await readBody(req);
       if (req.url === '/api/subagents') json(200, { ok: true, state: await this.controller.apply(input) });
+      else if (req.url === '/api/models') json(200, { ok: true, state: await this.controller.saveModels(input) });
+      else if (req.url === '/api/connection') json(200, { ok: true, state: await this.controller.saveConnection(input) });
       else json(202, { ok: true, operation: await this.controller.action(input) });
     } catch (error) {
       if (res.headersSent || res.destroyed) return;
       const code = /^[a-z][a-z0-9_-]{0,100}$/.test(error?.message) ? error.message : 'panel_request_failed';
-      json(error.status || (code.startsWith('invalid_') || code.startsWith('subagent_model_') ? 400 : 503),
+      json(error.status || (code.startsWith('invalid_') || code.startsWith('subagent_model_') || code === 'protocol_conflict' ? 400 : 503),
         { error: { code, message: MESSAGES[code] || '操作未完成，请检查当前状态后重试。', ...(error.details || {}) } });
     }
   }

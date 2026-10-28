@@ -174,7 +174,7 @@ async function serveCommand(argv, env, io, overrides = {}) {
   let backend, gateway;
   try {
     backend = new OpenAIBackend({ baseURL: config.upstream.baseURL, apiKey: env[config.upstream.apiKeyEnv], models: config.models });
-    gateway = new KimiWorkGateway({ backend, instructionsFile: flags.instructions });
+    gateway = new KimiWorkGateway({ backend, instructionsFile: flags.instructions, recordRequests: panelEnabled });
   } catch (failure) {
     io.err('kimi-work-gateway: invalid config (' + failure.message + ')');
     return 2;
@@ -215,11 +215,11 @@ async function serveCommand(argv, env, io, overrides = {}) {
     if (panelEnabled) {
       try {
         controller = new (overrides.PanelController || PanelController)({
-          configFile: flags.config, config, gateway, backend, stateDir, kimiDir, policy,
+          configFile: flags.config, config, gateway, backend, stateDir, kimiDir, policy, env,
           onPolicy: value => {
             const current = readStateFile(statusFile)?.value;
             if (current?.instanceId !== instanceId) return;
-            try { writeStatus(statusFile, { ...current, subagents: summarizeSubagentPolicy(value) }); }
+            try { writeStatus(statusFile, { ...current, models: backend.models.length, subagents: summarizeSubagentPolicy(value) }); }
             catch { io.err('kimi-work-gateway: cannot update ' + statusFile); }
           },
         });

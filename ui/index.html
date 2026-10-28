@@ -1,354 +1,523 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="auto">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
+<meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex, nofollow">
-<title>子代理目标 · Kimi Work 网关面板</title>
+<title>Kimi Work 网关 · 控制面板</title>
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
 
 <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
-  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="6.9" cy="6.9" r="4.4"/><path d="M10.2 10.2 14 14"/></symbol>
-  <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M2 8h11"/><path d="M9 4l4 4-4 4"/></symbol>
-  <symbol id="i-copy" viewBox="0 0 16 16"><path d="M5.5 5.5h8v8h-8z"/><path d="M2.5 10.5v-8h8"/></symbol>
-  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3l8 5-8 5z"/></symbol>
-  <symbol id="i-box" viewBox="0 0 16 16"><path d="M2.5 5.5h11v8h-11z"/><path d="M2.5 5.5 5 3h6l2.5 2.5"/><path d="M8 5.5v8"/></symbol>
-  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.2 8a5.2 5.2 0 1 1-1.7-3.9"/><path d="M13.4 2.2v3.4h-3.4"/></symbol>
-  <symbol id="i-alert" viewBox="0 0 16 16"><path d="M8 2.2 14.2 13.4H1.8z"/><path d="M8 6.2v3.2"/><path d="M8 11.4v.6"/></symbol>
-  <symbol id="i-check" viewBox="0 0 16 16"><path d="M2.6 8.4 6.4 12.2 13.6 3.6"/></symbol>
-  <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M5.5 3.5 10.5 8l-5 4.5"/></symbol>
-  <symbol id="i-x" viewBox="0 0 16 16"><path d="M3.5 3.5 12.5 12.5"/><path d="M12.5 3.5 3.5 12.5"/></symbol>
-  <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.4 9.6 9.6 6.4"/><path d="M5 11.2 3.8 12.4a2.6 2.6 0 0 1-3.6-3.6l2.4-2.4a2.6 2.6 0 0 1 3.6 0"/><path d="M11 4.8l1.2-1.2a2.6 2.6 0 0 1 3.6 3.6l-2.4 2.4a2.6 2.6 0 0 1-3.6 0"/></symbol>
-
-  <symbol id="m-solid" viewBox="0 0 16 16"><path d="M8 1.5v13" stroke-width="1.6"/></symbol>
-  <symbol id="m-dashed" viewBox="0 0 16 16"><path d="M8 1.5v13" stroke-width="1.6" stroke-dasharray="3 2.4"/></symbol>
-  <symbol id="m-half" viewBox="0 0 16 16"><path d="M8 7.5v7" stroke-width="1.6"/><path d="M8 1.5v3.4" stroke-width="1.6" opacity="0.28"/></symbol>
-  <symbol id="m-struck" viewBox="0 0 16 16"><path d="M8 1.5v13" stroke-width="1.2" opacity="0.5"/><path d="M3.2 12.4 12.8 3.6" stroke-width="1.3"/></symbol>
-  <symbol id="m-doubled" viewBox="0 0 16 16"><path d="M6.5 1.5v13" stroke-width="1.3"/><path d="M9.5 1.5v13" stroke-width="1.3"/></symbol>
-  <symbol id="m-capped" viewBox="0 0 16 16"><path d="M8 3.2v11.3" stroke-width="1.6"/><path d="M3.8 2.2h8.4" stroke-width="1.4"/></symbol>
-  <symbol id="m-conflict" viewBox="0 0 16 16"><path d="M5 1.5v13" stroke-width="1.2" stroke-dasharray="2.4 2"/><path d="M11 1.5v13" stroke-width="1.2" stroke-dasharray="2.4 2"/></symbol>
-
-  <symbol id="reg" viewBox="0 0 12 12"><path d="M6 0v12M0 6h12" stroke-width="1"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 16 16"><path d="M2.6 2.6h4.8v4.8H2.6z"/><path d="M8.6 2.6h4.8v4.8H8.6z"/><path d="M2.6 8.6h4.8v4.8H2.6z"/><path d="M8.6 8.6h4.8v4.8H8.6z"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 16 16"><path d="M8 2.2 13.8 5.3 8 8.4 2.2 5.3z"/><path d="M2.2 8.4 8 11.5l5.8-3.1"/><path d="M2.2 11.2 8 14.3l5.8-3.1"/></symbol>
+  <symbol id="i-agent" viewBox="0 0 16 16"><circle cx="8" cy="5.4" r="2.5"/><path d="M3.1 13.4c.7-2.5 2.7-3.7 4.9-3.7s4.2 1.2 4.9 3.7"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 2.2v3.1"/><path d="M10 2.2v3.1"/><path d="M4.2 5.3h7.6v2.3a3.8 3.8 0 0 1-7.6 0z"/><path d="M8 11.4v2.4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4.2 4.2l7.6 7.6"/><path d="M11.8 4.2l-7.6 7.6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.2v9.6"/><path d="M3.2 8h9.6"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 16 16"><path d="M2.4 13.6h11.2"/><path d="M4.1 10.4 10.9 3.6a1.7 1.7 0 0 1 2.4 2.4l-6.8 6.8-3.1.7z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.6 4.6h10.8"/><path d="M6.1 4.6V2.9h3.8v1.7"/><path d="M4.1 4.6l.7 8.9h6.4l.7-8.9"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.4 6.2 11.8 13 4.4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 16 16"><path d="M8 2.4 14 13.2H2z"/><path d="M8 6.4v3.1"/><path d="M8 11.6v.6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.7"/><path d="M13.4 2.4v3.3h-3.3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5.2 3.2 12.4 8 5.2 12.8z"/></symbol>
+  <symbol id="i-box" viewBox="0 0 16 16"><path d="M2.6 5.6h10.8v8H2.6z"/><path d="M2.6 5.6 5 2.8h6l2.4 2.8"/><path d="M8 5.6v8"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><path d="M5.6 5.6h8v8h-8z"/><path d="M2.4 10.4v-8h8"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 16 16"><path d="M2.4 3.2h11.2v9.6H2.4z"/><path d="M4.9 6.4 6.9 8l-2 1.6"/><path d="M8.5 10h2.7"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.7 9.3 9.3 6.7"/><path d="M5.7 11.1 4.5 12.3a2.5 2.5 0 0 1-3.5-3.5L3.3 6.5a2.5 2.5 0 0 1 3.5 0"/><path d="M10.3 4.9l1.2-1.2a2.5 2.5 0 0 1 3.5 3.5l-2.3 2.3a2.5 2.5 0 0 1-3.5 0"/></symbol>
 </svg>
 
 <a class="skip" href="#main">跳到主内容</a>
 
 <div class="shell" id="shell" hidden>
 
-  <aside class="rail" aria-label="系统状态">
-    <div class="rail__ident">
-      <svg class="rail__mark" viewBox="0 0 22 22" aria-hidden="true">
-        <path d="M1 21V1" stroke="currentColor" stroke-width="1" opacity="0.45"/>
-        <path d="M6 18V4" stroke="currentColor" stroke-width="1.4"/>
-        <path d="M11 18V9" stroke="currentColor" stroke-width="1.4" opacity="0.7"/>
-        <path d="M16 18V6" stroke="currentColor" stroke-width="1.4" opacity="0.5"/>
-        <path d="M1 11h19" stroke="currentColor" stroke-width="1" opacity="0.28"/>
+  <aside class="rail" aria-label="面板导航">
+    <div class="brand">
+      <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="2.5" y="4.5" width="19" height="15" rx="3.5"/>
+        <path d="M6.5 9.5h11"/>
+        <path d="M6.5 14.5h5.5"/>
+        <circle cx="16.6" cy="14.5" r="1.6" class="brand__dot"/>
       </svg>
-      <div>
-        <p class="wordmark">KIMI WORK</p>
-        <p class="wordmark__sub">网关控制面板</p>
+      <div class="brand__text">
+        <p class="brand__name">Kimi Work</p>
+        <p class="brand__sub">网关控制面板</p>
       </div>
     </div>
 
-    <nav class="rail__nav" aria-label="面板分区">
-      <a href="#binding" data-nav="binding"><span class="rail__nav-tick"></span>绑定</a>
-      <a href="#target" data-nav="target"><span class="rail__nav-tick"></span>目标</a>
-      <a href="#catalogue" data-nav="catalogue"><span class="rail__nav-tick"></span>目录</a>
-      <a href="#runtime" data-nav="runtime"><span class="rail__nav-tick"></span>运行时</a>
-      <a href="#native" data-nav="native"><span class="rail__nav-tick"></span>原生环境</a>
+    <nav class="nav" aria-label="面板视图">
+      <button class="nav__item" id="nav-overview" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-grid"/></svg>
+        <span>概览</span>
+      </button>
+      <button class="nav__item" id="nav-models" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg>
+        <span>模型管理</span>
+        <span class="nav__count mono" id="nav-model-count">…</span>
+      </button>
+      <button class="nav__item" id="nav-subagents" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-agent"/></svg>
+        <span>子代理</span>
+      </button>
+      <button class="nav__item" id="nav-connection" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-plug"/></svg>
+        <span>连接与诊断</span>
+      </button>
     </nav>
 
-    <section class="rail__block" aria-labelledby="rb-gw">
-      <h2 class="micro" id="rb-gw">网关</h2>
-      <p class="rail__state" id="r-gw-line" data-form="half">
-        <svg class="statemark" aria-hidden="true"><use href="#m-half"/></svg>
-        <span class="rail__state-word" id="r-gw-state">读取中</span>
-      </p>
-      <p class="rail__url mono" id="r-gw-url">…</p>
-      <dl class="rail__pairs">
-        <div><dt>模型</dt><dd class="mono" id="r-gw-models">…</dd></div>
-        <div><dt>请求中</dt><dd class="mono" id="r-gw-active">…</dd></div>
-      </dl>
-    </section>
-
-    <section class="rail__block" aria-labelledby="rb-cfg">
-      <h2 class="micro" id="rb-cfg">配置</h2>
-      <p class="rail__state" id="r-cfg-line" data-form="half">
-        <svg class="statemark" aria-hidden="true"><use href="#m-half"/></svg>
-        <span class="rail__state-word" id="r-cfg-state">读取中</span>
-      </p>
-      <p class="rail__url mono" id="r-cfg-file">…</p>
-      <p class="rail__note" id="r-cfg-note" hidden></p>
-    </section>
-
-    <section class="rail__block" aria-labelledby="rb-rt">
-      <h2 class="micro" id="rb-rt">运行时</h2>
-      <p class="rail__state" id="r-rt-line" data-form="half">
-        <svg class="statemark" aria-hidden="true"><use href="#m-half"/></svg>
-        <span class="rail__state-word" id="r-rt-state">读取中</span>
-      </p>
-      <dl class="rail__pairs">
-        <div><dt>版本</dt><dd class="mono" id="r-rt-version">…</dd></div>
-        <div><dt>模式</dt><dd class="mono" id="r-rt-mode">…</dd></div>
-      </dl>
-    </section>
-
-    <section class="rail__block" aria-labelledby="rb-sess">
-      <h2 class="micro" id="rb-sess">会话</h2>
-      <p class="rail__state" data-form="solid">
-        <svg class="statemark" aria-hidden="true"><use href="#m-solid"/></svg>
-        <span class="rail__state-word" id="r-sess-state">密钥已载入</span>
-      </p>
-      <p class="rail__note mono" id="r-sync">…</p>
-    </section>
+    <div class="rail__status">
+      <p class="rail__label">本机网关</p>
+      <p class="rail__line"><span class="dot" id="rail-gateway-dot" data-tone="neutral"></span><span id="rail-gateway-text">读取中</span></p>
+      <p class="rail__url mono" id="rail-gateway-url">…</p>
+    </div>
 
     <div class="rail__foot">
-      <label class="rail__theme">
-        <span class="micro">外观</span>
-        <select id="theme" aria-label="界面外观">
-          <option value="auto">跟随系统</option>
-          <option value="dark">深色</option>
+      <label class="field field--inline">
+        <span class="field__label">外观</span>
+        <select id="theme">
           <option value="light">浅色</option>
+          <option value="dark">深色</option>
+          <option value="auto">跟随系统</option>
         </select>
       </label>
-      <p class="rail__note">本机面板 · 不返回配置原文与凭证</p>
+      <p class="rail__note">仅监听本机 · 页面不显示凭证</p>
     </div>
   </aside>
 
-  <main class="plate" id="main">
-
-    <div class="conn" id="conn" hidden>
-      <p class="conn__text">
-        <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
-        <span id="conn-text">无法连接本机面板服务。</span>
-      </p>
-      <button class="btn btn--outline btn--sm" id="conn-retry" type="button">
-        <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>重试
-      </button>
-    </div>
-
-    <header class="plate__head">
-      <span class="reg reg--tl" aria-hidden="true"><svg><use href="#reg"/></svg></span>
-      <span class="reg reg--tr" aria-hidden="true"><svg><use href="#reg"/></svg></span>
-      <div class="plate__title">
-        <h1>子代理目标</h1>
-        <p class="plate__lede">选择本机子代理实际使用的模型与推理档位。主模型始终在 Kimi Work 的菜单中切换，本面板不会改动它。</p>
+  <main class="main" id="main">
+    <header class="topbar">
+      <div class="topbar__title">
+        <h1 id="view-title">概览</h1>
+        <p id="view-lede">网关、配置与子代理目标此刻的真实状态。</p>
       </div>
-      <div class="plate__meta">
-        <p class="micro">状态版本</p>
-        <p class="mono plate__rev" id="rev">…</p>
-        <p class="micro plate__sync" id="sync">尚未读取</p>
+      <div class="topbar__meta">
+        <p class="mono" id="sync">尚未同步</p>
+        <button class="btn btn--quiet" id="refresh" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>刷新
+        </button>
       </div>
     </header>
 
-    <section class="binding" id="binding" aria-labelledby="binding-title">
-      <span class="reg reg--bl" aria-hidden="true"><svg><use href="#reg"/></svg></span>
-      <span class="reg reg--br" aria-hidden="true"><svg><use href="#reg"/></svg></span>
-      <div class="binding__head">
-        <h2 id="binding-title">绑定</h2>
-        <p class="binding__hint">已保存是配置里写下的目标，实际采用是运行时此刻加载的策略。两者分开读数。</p>
-      </div>
+    <div class="banner banner--bad" id="conn" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <p id="conn-text">无法连接本机面板服务。</p>
+      <button class="btn btn--outline btn--sm" id="conn-retry" type="button">重试</button>
+    </div>
 
-      <div class="registers">
-        <div class="register register--saved">
-          <p class="micro">已保存</p>
-          <p class="register__value mono" id="saved-value">…</p>
-          <p class="register__sub" id="saved-sub">读取中</p>
+    <div class="banner banner--warn" id="restart-banner" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <p id="restart-banner-text"></p>
+      <button class="btn btn--outline btn--sm" id="restart-banner-link" type="button">查看连接设置</button>
+    </div>
+
+    <div class="opbar" id="opbar" hidden>
+      <span class="dot" id="opbar-dot" data-tone="neutral"></span>
+      <p class="opbar__name" id="opbar-name">—</p>
+      <p class="opbar__note" id="opbar-note"></p>
+      <span class="opbar__bar" aria-hidden="true"></span>
+    </div>
+
+    <section class="view" id="view-overview" aria-labelledby="overview-heading">
+
+      <div class="panel">
+        <div class="panel__head">
+          <h2 id="overview-heading">运行状态</h2>
+          <p>来自本机网关进程的实时读数。</p>
         </div>
-
-        <div class="verdict" id="verdict" data-form="half" role="status" aria-live="polite">
-          <div class="verdict__mark" aria-hidden="true">
-            <svg class="mark mark--solid"><use href="#m-solid"/></svg>
-            <svg class="mark mark--dashed"><use href="#m-dashed"/></svg>
-            <svg class="mark mark--half"><use href="#m-half"/></svg>
-            <svg class="mark mark--struck"><use href="#m-struck"/></svg>
-            <svg class="mark mark--doubled"><use href="#m-doubled"/></svg>
-            <svg class="mark mark--capped"><use href="#m-capped"/></svg>
-            <svg class="mark mark--conflict"><use href="#m-conflict"/></svg>
+        <dl class="facts">
+          <div class="fact">
+            <dt>网关</dt>
+            <dd><span class="dot" id="fact-gateway-dot" data-tone="neutral"></span><span id="fact-gateway">…</span></dd>
+            <p class="fact__sub mono" id="fact-gateway-url">…</p>
           </div>
-          <p class="verdict__word" id="verdict-word">读取中</p>
-          <p class="verdict__note" id="verdict-note"></p>
-        </div>
+          <div class="fact">
+            <dt>模型目录</dt>
+            <dd id="fact-models">…</dd>
+            <p class="fact__sub" id="fact-models-sub">…</p>
+          </div>
+          <div class="fact">
+            <dt>子代理运行时</dt>
+            <dd><span class="dot" id="fact-runtime-dot" data-tone="neutral"></span><span id="fact-runtime">…</span></dd>
+            <p class="fact__sub" id="fact-runtime-sub">…</p>
+          </div>
+          <div class="fact">
+            <dt>配置文件</dt>
+            <dd><span class="dot" id="fact-config-dot" data-tone="neutral"></span><span id="fact-config">…</span></dd>
+            <p class="fact__sub mono" id="fact-config-file">…</p>
+          </div>
+        </dl>
+      </div>
 
-        <div class="register register--adopted">
-          <p class="micro">实际采用</p>
-          <p class="register__value mono" id="adopted-value">…</p>
-          <p class="register__sub" id="adopted-sub">读取中</p>
+      <div class="panel">
+        <div class="panel__head">
+          <h2>子代理目标</h2>
+          <p>查看保存的目标及 Kimi 当前采用的策略。</p>
+        </div>
+        <div class="binding">
+          <div class="binding__col">
+            <p class="binding__label">已保存</p>
+            <p class="binding__value" id="saved-value">…</p>
+            <p class="binding__sub" id="saved-sub">…</p>
+          </div>
+          <div class="binding__col">
+            <p class="binding__label">实际采用</p>
+            <p class="binding__value" id="adopted-value">…</p>
+            <p class="binding__sub" id="adopted-sub">…</p>
+          </div>
+        </div>
+        <p class="verdict" id="verdict">
+          <span class="dot" id="verdict-dot" data-tone="neutral"></span>
+          <strong id="verdict-word">读取中</strong>
+          <span class="verdict__note" id="verdict-note"></span>
+        </p>
+        <div class="panel__actions">
+          <button class="btn btn--outline" id="go-subagents" type="button">设置子代理目标</button>
         </div>
       </div>
 
-      <div class="band" id="band">
-        <div class="band__plot" id="band-plot">
-          <svg id="band-svg" class="band__svg" role="img" aria-labelledby="band-desc"></svg>
-          <p class="sr-only" id="band-desc">上下文窗口校准带：按目录中模型的上下文窗口线性排列，标出已保存目标、草稿与运行时采用的模型位置。具体数值在下方读数中列出。</p>
+      <div class="panel">
+        <div class="panel__head">
+          <h2>推理流量</h2>
+          <p>本进程启动以来的真实计数，不含费用估算。</p>
         </div>
-        <div class="band__axis" id="band-axis" aria-hidden="true"></div>
-        <div class="band__readouts" id="band-readouts"></div>
+        <dl class="metrics">
+          <div class="metric"><dt>请求</dt><dd class="mono" id="metric-requests">0</dd></div>
+          <div class="metric"><dt>失败</dt><dd class="mono" id="metric-failures">0</dd></div>
+          <div class="metric"><dt>运行时长</dt><dd class="mono" id="metric-uptime">—</dd></div>
+        </dl>
+        <div class="table-wrap">
+          <table class="table" id="recent-table">
+            <thead>
+              <tr>
+                <th scope="col">时间</th>
+                <th scope="col">模型</th>
+                <th scope="col">协议</th>
+                <th scope="col" class="num">状态</th>
+                <th scope="col" class="num">耗时</th>
+              </tr>
+            </thead>
+            <tbody id="recent-body"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="recent-empty">尚无推理请求。Kimi 开始调用模型后，这里会出现最近的 20 条记录。</p>
       </div>
+
     </section>
 
-    <div class="work">
+    <section class="view" id="view-models" aria-labelledby="models-heading" hidden>
+      <h2 class="sr-only" id="models-heading">模型目录</h2>
+      <div class="toolbar">
+        <div class="search">
+          <svg class="icon search__icon" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="model-q" type="search" placeholder="搜索 ID、名称或档位" autocomplete="off" spellcheck="false" aria-label="搜索模型">
+          <button class="search__clear" id="model-q-clear" type="button" aria-label="清除搜索" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+          </button>
+        </div>
+        <div class="segmented" role="group" aria-label="筛选模型">
+          <button id="filter-all" type="button" aria-pressed="true">全部</button>
+          <button id="filter-vision" type="button" aria-pressed="false">视觉</button>
+          <button id="filter-tools" type="button" aria-pressed="false">工具</button>
+          <button id="filter-reasoning" type="button" aria-pressed="false">推理</button>
+        </div>
+        <p class="toolbar__count mono" id="model-count">…</p>
+        <button class="btn btn--primary" id="model-new" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>新增模型
+        </button>
+      </div>
 
-      <section class="target" id="target" aria-labelledby="target-title">
-        <div class="target__head">
-          <h2 id="target-title">目标</h2>
-          <p class="target__hint">只有声明支持工具调用的模型能作为子代理。选择模型会自动切到「指定模型」。</p>
+      <div class="workbench" id="workbench" data-open="false">
+        <div class="table-wrap table-wrap--models" id="model-table-wrap">
+          <table class="table table--models" id="model-table">
+            <thead>
+              <tr>
+                <th scope="col">模型 ID</th>
+                <th scope="col" class="col-proto">协议</th>
+                <th scope="col" class="num">上下文</th>
+                <th scope="col" class="num col-out">输出</th>
+                <th scope="col" class="col-cap">能力</th>
+                <th scope="col" class="col-efforts">思考档位</th>
+                <th scope="col" class="col-actions">操作</th>
+              </tr>
+            </thead>
+            <tbody id="model-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="model-empty" hidden>
+          <p class="empty__title" id="model-empty-title">没有匹配的模型</p>
+          <p class="empty__note" id="model-empty-note">换一个关键词，或清除筛选。</p>
+          <button class="btn btn--outline btn--sm" id="model-empty-reset" type="button">清除筛选</button>
         </div>
 
-        <fieldset class="modes" id="modes">
+        <aside class="inspector" id="inspector" aria-labelledby="inspector-title" hidden>
+          <div class="inspector__head">
+            <h2 id="inspector-title">新增模型</h2>
+            <button class="iconbtn" id="inspector-close" type="button" aria-label="关闭编辑器">
+              <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+            </button>
+          </div>
+          <form class="inspector__form" id="model-form" novalidate>
+            <label class="field">
+              <span class="field__label">模型 ID</span>
+              <input id="m-id" class="mono" autocomplete="off" spellcheck="false" placeholder="group/deepseek-v4-1-flash">
+              <span class="field__hint" id="m-id-hint">末段以 kimi- 开头时必须使用 Chat 协议，其他使用 Responses。</span>
+            </label>
+            <label class="field">
+              <span class="field__label">显示名称（可选）</span>
+              <input id="m-name" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="field">
+              <span class="field__label">协议</span>
+              <p class="field__static mono" id="m-protocol">—</p>
+              <span class="field__hint">由模型 ID 决定，不能单独声明。</span>
+            </div>
+            <div class="field-row">
+              <label class="field">
+                <span class="field__label">上下文窗口</span>
+                <input id="m-context" type="number" inputmode="numeric" min="1" step="1">
+              </label>
+              <label class="field">
+                <span class="field__label">最大输出（可选）</span>
+                <input id="m-output" type="number" inputmode="numeric" min="1" step="1">
+              </label>
+            </div>
+            <fieldset class="field field--group">
+              <legend class="field__label">声明能力</legend>
+              <label class="check"><input type="checkbox" id="m-tools"><span>支持工具调用（可作为子代理）</span></label>
+              <label class="check"><input type="checkbox" id="m-reasoning"><span>支持思考档位</span></label>
+              <label class="check"><input type="checkbox" id="m-vision"><span>接受图片输入（视觉）</span></label>
+              <p class="field__hint">按上游实际能力声明；勾选视觉不会让纯文本模型获得识图能力。</p>
+            </fieldset>
+            <div class="field" id="m-effort-field">
+              <label class="field__label" for="m-efforts">思考档位</label>
+              <input id="m-efforts" class="mono" autocomplete="off" spellcheck="false" placeholder="low, medium, high">
+              <span class="field__hint">逗号分隔的小写标识符，例如 low, medium, high, xhigh。只填写上游真实支持的档位。</span>
+              <div class="chips" id="m-effort-chips"></div>
+            </div>
+            <label class="field">
+              <span class="field__label">默认档位</span>
+              <select id="m-default"><option value="">自动</option></select>
+              <span class="field__hint">必须是上面列出的档位之一。</span>
+            </label>
+            <p class="errors" id="model-errors" hidden></p>
+            <div class="inspector__foot">
+              <button class="btn btn--quiet" id="model-cancel" type="button">取消</button>
+              <button class="btn btn--primary" id="model-save" type="button">保存目录</button>
+            </div>
+            <p class="field__hint" id="model-save-note">保存会提交完整模型目录，服务端立即应用。</p>
+          </form>
+        </aside>
+      </div>
+
+      <p class="hint" id="models-note">模型目录保存后立即应用；Kimi 自带目录需要重新测试导入。删除正在被子代理使用的模型会先被拒绝。</p>
+    </section>
+
+    <section class="view" id="view-subagents" aria-labelledby="subagents-heading" hidden>
+      <div class="panel">
+        <div class="panel__head">
+          <h2 id="subagents-heading">目标</h2>
+          <p>保存后写入策略，只影响之后新建的子代理会话。</p>
+        </div>
+
+        <fieldset class="choices" id="sa-modes">
           <legend class="sr-only">子代理模式</legend>
-          <label class="mode">
-            <input type="radio" name="mode" value="inherit">
-            <span class="mode__body">
-              <span class="mode__title">继承主模型</span>
-              <span class="mode__note">子代理跟随 Kimi Work 菜单中当前的主模型，不固定模型。</span>
+          <label class="choice">
+            <input type="radio" name="mode" value="inherit" id="mode-inherit">
+            <span class="choice__body">
+              <span class="choice__title">继承主模型</span>
+              <span class="choice__note">跟随 Kimi Work 菜单中当前的主模型，不固定模型与档位。</span>
             </span>
           </label>
-          <label class="mode">
-            <input type="radio" name="mode" value="force">
-            <span class="mode__body">
-              <span class="mode__title">指定模型</span>
-              <span class="mode__note">子代理固定使用目录中的一个模型，可另设推理档位。</span>
+          <label class="choice">
+            <input type="radio" name="mode" value="force" id="mode-force">
+            <span class="choice__body">
+              <span class="choice__title">指定模型</span>
+              <span class="choice__note">固定使用目录中的一个模型，可另设思考档位。</span>
             </span>
           </label>
         </fieldset>
 
-        <div class="effort" id="effort">
-          <div class="effort__head">
-            <h3 class="micro" id="effort-label">推理档位</h3>
-            <p class="effort__hint" id="effort-hint">继承模式下不设档位，由主模型决定。</p>
-          </div>
-          <div class="effort__options" id="effort-options" role="radiogroup" aria-labelledby="effort-label"></div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field__label">模型</span>
+            <select id="sa-model"></select>
+            <span class="field__hint" id="sa-model-hint">只列出声明支持工具调用的模型。</span>
+          </label>
+          <label class="field">
+            <span class="field__label">思考档位</span>
+            <select id="sa-effort"></select>
+            <span class="field__hint" id="sa-effort-hint">只列出该模型声明的档位。</span>
+          </label>
         </div>
 
-        <div class="catalogue" id="catalogue">
-          <div class="catalogue__bar">
-            <div class="search">
-              <svg class="icon search__icon" aria-hidden="true"><use href="#i-search"/></svg>
-              <input id="q" type="search" placeholder="搜索模型 ID 或名称" autocomplete="off" spellcheck="false" aria-label="搜索模型">
-              <button class="search__clear" id="q-clear" type="button" aria-label="清除搜索" hidden>
-                <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
-              </button>
-            </div>
-            <label class="check">
-              <input type="checkbox" id="only-tools">
-              <span>仅显示可用于子代理</span>
-            </label>
-            <p class="catalogue__count mono" id="count" aria-live="polite">…</p>
-          </div>
+        <p class="note note--warn" id="sa-warning" hidden></p>
 
-          <fieldset class="models" id="models">
-            <legend class="sr-only">子代理目标模型</legend>
-            <div class="models__list" id="model-list" aria-busy="true"></div>
-            <div class="empty" id="models-empty" hidden>
-              <p class="empty__title" id="empty-title">没有匹配的模型</p>
-              <p class="empty__note" id="empty-note">换一个关键词，或清除筛选。</p>
-              <button class="btn btn--outline btn--sm" id="empty-reset" type="button">清除筛选</button>
-            </div>
-          </fieldset>
+        <div class="panel__actions">
+          <p class="draft" id="sa-draft">草稿与已保存一致</p>
+          <button class="btn btn--quiet" id="sa-reset" type="button" disabled>放弃修改</button>
+          <button class="btn btn--primary" id="sa-save" type="button" disabled>保存目标</button>
         </div>
+      </div>
 
-        <div class="applybar" id="applybar">
-          <div class="applybar__read">
-            <p class="applybar__draft" id="draft-state">草稿与已保存一致</p>
-            <p class="applybar__detail" id="draft-detail">…</p>
-          </div>
-          <div class="applybar__actions">
-            <button class="btn btn--quiet btn--sm" id="btn-reset" type="button" disabled>放弃修改</button>
-            <button class="btn btn--outline" id="btn-inherit" type="button">恢复继承</button>
-            <button class="btn btn--primary" id="btn-apply" type="button" disabled>
-              <span id="btn-apply-label">应用目标</span>
-              <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>
-            </button>
-          </div>
+      <div class="panel">
+        <div class="panel__head">
+          <h2>运行时</h2>
+          <p>本机副本此刻观测到的状态，与保存的选择分开判断。</p>
         </div>
-      </section>
-
-      <aside class="runtime" id="runtime" aria-labelledby="runtime-title">
-        <div class="runtime__head">
-          <h2 id="runtime-title">运行时</h2>
-          <p class="runtime__hint">本机副本与原生环境</p>
-        </div>
-
-        <dl class="facts">
-          <div><dt>状态</dt><dd id="rt-state" data-form="half">…</dd></div>
-          <div><dt>版本</dt><dd class="mono" id="rt-version">…</dd></div>
-          <div><dt>模式</dt><dd class="mono" id="rt-mode">…</dd></div>
-          <div><dt>模型别名</dt><dd class="mono" id="rt-alias">…</dd></div>
-          <div><dt>最近启动</dt><dd class="mono" id="rt-spawn">…</dd></div>
+        <dl class="facts facts--compact">
+          <div class="fact">
+            <dt>状态</dt>
+            <dd><span class="dot" id="rt-state-dot" data-tone="neutral"></span><span id="rt-state">…</span></dd>
+          </div>
+          <div class="fact"><dt>版本</dt><dd class="mono" id="rt-version">—</dd></div>
+          <div class="fact"><dt>模式</dt><dd class="mono" id="rt-mode">—</dd></div>
+          <div class="fact"><dt>最近启动</dt><dd class="mono" id="rt-spawn">—</dd></div>
         </dl>
+        <p class="verdict" id="sa-verdict">
+          <span class="dot" id="sa-verdict-dot" data-tone="neutral"></span>
+          <strong id="sa-verdict-word">读取中</strong>
+          <span class="verdict__note" id="sa-verdict-note"></span>
+        </p>
+        <p class="hint">主模型在 Kimi Work 菜单中切换，本面板不改动它。准备副本、启动 Kimi 与系统设置在「连接与诊断」。</p>
+      </div>
+    </section>
 
-        <p class="runtime__reason" id="rt-reason" hidden></p>
-
-        <div class="op" id="op" data-form="half">
-          <p class="micro">当前操作</p>
-          <p class="op__name" id="op-name">无进行中的操作</p>
-          <p class="op__note" id="op-note" hidden></p>
+    <section class="view" id="view-connection" aria-labelledby="connection-heading" hidden>
+      <div class="panel">
+        <div class="panel__head">
+          <h2 id="connection-heading">上游连接</h2>
+          <p>这里编辑配置文件中的值；保存后需要重启面板才会生效。</p>
         </div>
+        <form id="conn-form" novalidate>
+          <label class="field">
+            <span class="field__label">上游地址</span>
+            <input id="c-base" class="mono" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1">
+            <span class="field__hint">必须使用 HTTPS；本机回环地址可用 HTTP。不能包含账号、密码、查询参数或片段。</span>
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span class="field__label">API Key 变量名</span>
+              <input id="c-keyenv" class="mono" autocomplete="off" spellcheck="false" placeholder="UPSTREAM_API_KEY">
+              <span class="field__hint">只填写环境变量名，凭证本身不会进入页面。</span>
+            </label>
+            <label class="field">
+              <span class="field__label">网关 Token 变量名</span>
+              <input id="c-tokenenv" class="mono" autocomplete="off" spellcheck="false" placeholder="KIMI_WORK_GATEWAY_TOKEN">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span class="field__label">网关端口</span>
+              <input id="c-port" type="number" inputmode="numeric" min="0" max="65535" step="1">
+            </label>
+            <label class="field">
+              <span class="field__label">DNS 端口</span>
+              <input id="c-dnsport" type="number" inputmode="numeric" min="1024" max="65535" step="1">
+            </label>
+          </div>
+          <label class="check"><input type="checkbox" id="c-dns"><span>启用本机 DNS 映射</span></label>
 
-        <div class="actions">
-          <button class="btn btn--outline btn--wide" data-action="prepare-runtime" type="button">
+          <div class="env" id="env-status">
+            <p><span class="dot" id="env-key-dot" data-tone="neutral"></span>上游 Key：<span id="env-key">…</span></p>
+            <p><span class="dot" id="env-token-dot" data-tone="neutral"></span>网关 Token：<span id="env-token">…</span></p>
+          </div>
+
+          <div class="diff" id="pending-diff" hidden></div>
+          <p class="errors" id="conn-errors" hidden></p>
+
+          <div class="panel__actions">
+            <p class="draft" id="conn-draft">草稿与配置文件一致</p>
+            <button class="btn btn--quiet" id="conn-fill-active" type="button">填入当前生效值</button>
+            <button class="btn btn--primary" id="conn-save" type="button" disabled>保存连接</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel" id="restart-panel">
+        <div class="panel__head">
+          <h2>应用连接修改</h2>
+          <p>本面板不提供自动重启，重启由你在终端完成。</p>
+        </div>
+        <p class="restart__state" id="restart-state">读取中</p>
+        <ol class="steps">
+          <li>在运行面板的终端窗口按 <kbd>Ctrl</kbd> + <kbd>C</kbd> 结束进程。</li>
+          <li>重新执行 <code>kimi-work-gateway panel --config &lt;配置文件&gt;</code>。</li>
+          <li>用终端新输出的 <code>http://127.0.0.1:&lt;端口&gt;/#key=…</code> 链接打开面板。</li>
+        </ol>
+        <p class="hint">配置变更期间模型与子代理不可保存；连接可以改回当前生效值以撤销待重启的修改。</p>
+        <p class="mono restart__file" id="restart-file">—</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head">
+          <h2>诊断</h2>
+          <p>只验证可达性与目录兼容，不代表推理成功。</p>
+        </div>
+        <div class="diag-grid">
+          <div class="diag">
+            <p class="diag__title">上游连通性</p>
+            <p class="diag__state"><span class="dot" id="diag-upstream-dot" data-tone="neutral"></span><span id="diag-upstream-state">未检查</span></p>
+            <p class="diag__meta" id="diag-upstream-meta">只请求上游 GET /models，不产生推理费用。</p>
+            <button class="btn btn--outline btn--sm" data-action="check-upstream" type="button">检查上游</button>
+          </div>
+          <div class="diag">
+            <p class="diag__title">本机目录兼容性</p>
+            <p class="diag__state"><span class="dot" id="diag-compat-dot" data-tone="neutral"></span><span id="diag-compat-state">未检查</span></p>
+            <p class="diag__meta" id="diag-compat-meta">用本机 Kimi 目录解析器试导入当前模型目录。</p>
+            <button class="btn btn--outline btn--sm" data-action="check-compat" type="button">检查兼容性</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head">
+          <h2>运行时操作</h2>
+          <p>启动请求不会强制结束已运行的 Kimi。</p>
+        </div>
+        <div class="actions-grid">
+          <button class="btn btn--outline" data-action="prepare-runtime" type="button">
             <svg class="icon" aria-hidden="true"><use href="#i-box"/></svg>准备副本
           </button>
-          <button class="btn btn--outline btn--wide" data-action="launch-kimi" type="button">
+          <button class="btn btn--outline" data-action="launch-kimi" type="button">
             <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>启动 Kimi
           </button>
-          <button class="btn btn--quiet btn--wide" data-action="copy-token" type="button">
+          <button class="btn btn--outline" data-action="copy-token" type="button">
             <svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>复制 Token
           </button>
+          <button class="btn btn--outline" data-action="prepare-native" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg>准备原生设置
+          </button>
+          <button class="btn btn--outline" data-action="remove-dns" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-link"/></svg>撤销 DNS 映射
+          </button>
         </div>
-
-        <p class="runtime__note">准备副本会复制本机受支持的 Kimi 运行时到副本目录；之后新建的子代理在启动时读取当前策略，通常不需要重启 Kimi。启动使用已准备的副本，不会强制结束正在运行的 Kimi。</p>
-
-        <details class="native" id="native">
-          <summary>
-            <svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg>
-            <span>原生环境与 DNS</span>
-            <span class="native__badge" id="native-badge">首次设置</span>
-          </summary>
-          <div class="native__body">
-            <dl class="facts facts--tight">
-              <div><dt>内网检测</dt><dd id="native-passed" data-form="half">…</dd></div>
-              <div><dt>地址</dt><dd class="mono" id="native-address">…</dd></div>
-            </dl>
-            <p class="native__error" id="native-error" hidden></p>
-            <p class="native__note">准备原生设置会写入一条本机映射，由系统向管理员请求授权：macOS 写 <span class="mono">/etc/resolver/dev.msh.team</span>，Windows 只改 hosts 的两行。仅在首次设置或需要撤销时使用。</p>
-            <div class="native__actions">
-              <button class="btn btn--outline btn--sm btn--wide" data-action="prepare-native" type="button">准备原生设置</button>
-              <button class="btn btn--quiet btn--sm btn--wide" data-action="remove-dns" type="button">撤销 DNS 映射</button>
-            </div>
-          </div>
-        </details>
-
-        <p class="runtime__foot">本面板不读取对话、不返回凭证，也不提供用量或费用统计。</p>
-      </aside>
-    </div>
+        <p class="hint">准备副本会复制受支持的 Kimi 运行时到本机副本目录；原生设置会写入系统映射，由系统请求管理员授权。</p>
+      </div>
+    </section>
   </main>
 </div>
 
 <div class="gate" id="gate">
-  <div class="gate__plate">
-    <svg class="gate__mark" viewBox="0 0 22 22" aria-hidden="true">
-      <path d="M1 21V1" stroke="currentColor" stroke-width="1" opacity="0.45"/>
-      <path d="M6 18V4" stroke="currentColor" stroke-width="1.4"/>
-      <path d="M11 18V9" stroke="currentColor" stroke-width="1.4" opacity="0.7"/>
-      <path d="M16 18V6" stroke="currentColor" stroke-width="1.4" opacity="0.5"/>
-      <path d="M1 11h19" stroke="currentColor" stroke-width="1" opacity="0.28"/>
+  <div class="gate__card">
+    <svg class="gate__mark" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="2.5" y="4.5" width="19" height="15" rx="3.5"/>
+      <path d="M6.5 9.5h11"/>
+      <path d="M6.5 14.5h5.5"/>
+      <circle cx="16.6" cy="14.5" r="1.6" class="brand__dot"/>
     </svg>
     <h1 id="gate-title">正在读取会话</h1>
     <p class="gate__lede" id="gate-lede">正在确认面板会话密钥。</p>
-    <ol class="gate__steps">
-      <li>回到运行 <span class="mono">panel</span> 的终端窗口。</li>
-      <li>打开终端输出的 <span class="mono">http://127.0.0.1:&lt;端口&gt;/#key=…</span> 链接。</li>
+    <ol class="steps">
+      <li>回到运行 <code>panel</code> 的终端窗口。</li>
+      <li>打开终端输出的 <code>http://127.0.0.1:&lt;端口&gt;/#key=…</code> 链接。</li>
       <li>若面板已重启，旧链接会失效，请使用新链接。</li>
     </ol>
     <div class="gate__actions" id="gate-actions" hidden>
       <button class="btn btn--primary" id="gate-retry" type="button">
-        <span>重新检查</span>
-        <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>重新检查
       </button>
     </div>
     <p class="gate__note" id="gate-note" hidden></p>
@@ -357,9 +526,9 @@
 
 <noscript>
   <div class="gate">
-    <div class="gate__plate">
+    <div class="gate__card">
       <h1>需要启用 JavaScript</h1>
-      <p class="gate__lede">此面板在本机读取网关状态并提交目标，全部交互依赖 <span class="mono">app.js</span>。</p>
+      <p class="gate__lede">此面板在本机读取网关状态并提交修改，全部交互依赖 <code>app.js</code>。</p>
     </div>
   </div>
 </noscript>

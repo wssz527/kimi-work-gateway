@@ -150,7 +150,9 @@ test('state reports actual selection and runtime evidence without credentials or
   expect(state.subagents.configured).toEqual({ mode: 'inherit' });
   expect(state.subagents.policy).toEqual({ mode: 'inherit' });
   expect(state.subagents.runtime.lastSpawn).toEqual({ modelAlias: 'byok-kth-kimi/kimi-test-parent', at: 100 });
-  for (const hidden of [KEY, TOKEN, f.panel.key, '/private/bundle', 'PANEL_TEST_KEY', f.dir, f.policy.ownerID]) expect(text).not.toContain(hidden);
+  expect(state.connection.active.upstream.apiKeyEnv).toBe('PANEL_TEST_KEY');
+  expect(state.connection.environment).toEqual({ apiKeySet: false, tokenSet: false });
+  for (const hidden of [KEY, TOKEN, f.panel.key, '/private/bundle', f.dir, f.policy.ownerID]) expect(text).not.toContain(hidden);
 });
 
 test('apply persists force model and effort, updates live policy, and survives a restart', async () => {

@@ -7,39 +7,40 @@ related_targets: []
 
 # Local control panel — Kimi Work gateway
 
-Scope: the standalone local web panel served by `panel --config <file>` (route `/`), single page, no other routes.
+Scope: the standalone local web panel served by `panel --config <file>` (route `/`). One shell with four views — overview, models, subagents, connection & diagnostics — and no other routes.
+
 Mode: Operate. The visitor is mid-task and must leave with a correct belief about what is actually in force.
 
 ## Audience and job
 
-Audience: one person on their own Mac/Windows desktop, running Kimi Work with a third-party model gateway, who wants native subagents to run on a chosen model and effort. They are technically fluent, distrust marketing copy, and will read a state word literally.
+Audience: one person on their own Mac/Windows desktop, running Kimi Work with a third-party model gateway. They are technically fluent, distrust marketing copy, and read a state word literally.
 
-Job: see whether the gateway, the configuration, and the native runtime are actually in a usable state; find a model among the configured catalogue; draft a subagent target (inherit or a forced model + effort); apply it; and afterwards know whether that choice is merely saved or genuinely adopted by the runtime.
+Job: check that the gateway, catalogue and native runtime are usable; add, edit or remove models and declare their real capabilities and reasoning efforts; set the native subagent target and effort; edit the upstream connection and read diagnostics; and afterwards know whether a change is saved, pending a restart, or genuinely adopted.
 
-Constraints carried from PRODUCT.md: never invent models, prices, or usage; the main model is chosen in Kimi Work's own menu and is out of scope; credentials never reach the DOM; configuration that is not ready blocks saving and must offer the restart path; an already-running Kimi is never killed; every operation has a truthful intermediate state.
+Constraints carried from PRODUCT.md: never invent models, prices or usage; the main model is chosen in Kimi Work's own menu; credentials never reach the DOM; a configuration that is not ready blocks catalogue and subagent saves and must name the restart path; an already-running Kimi is never killed; every operation has a truthful intermediate state.
 
 ## Content and proof
 
-Real API contract only (`/api/state`, `/api/subagents`, `/api/actions`). Nothing is mocked: while the backend is absent the page must show its own unreachable state honestly. Proof is the separation of saved target and adopted runtime, expressed structurally rather than asserted in prose.
+Real API contract only (`/api/state`, `/api/models`, `/api/connection`, `/api/subagents`, `/api/actions`). Nothing is mocked: while the backend is absent the page shows its own unreachable state. Proof is structural — saved and adopted are two labelled columns, a pending restart is a banner comparing active with saved, and diagnostics are results of named checks with their timestamps, never claims about inference.
 
 ## Chosen direction and memorable moment
 
-The panel is a working plate calibrated against one off-centre rail: colour survives only as hairline emission lines standing on a banded charcoal continuum, and state is carried in line form (height, dash, doubling, strike) rather than hue. The memorable moment is the binding strip: the saved target and the runtime's adopted target sit as two registers on the same horizontal rule, and the verdict between them is decided by line form, so "saved" and "in force" can never be confused.
+The panel is a model workbench: a quiet light system-settings shell, a catalogue you can actually edit, and a right-side inspector that edits one model without losing the table. The memorable moment is the catalogue row opening into the inspector while the rest of the list stays put — the workbench keeps your place while you change the thing in front of you.
 
 ## Unresolved decisions
 
-System light/dark follows the OS by default with an explicit override; no brand identity exists for this tool and none is being introduced. Windows desktop acceptance is scheduled separately by the user.
+Light is the default; dark is an explicit option and follows the system only when chosen. No brand identity exists for this tool and none is introduced. Windows desktop acceptance is scheduled separately by the user.
 
 ## Direction contract
 
-THESIS: This surface is a calibrated instrument plate, not a settings dashboard. It refuses the category default of a stack of same-size status cards with a coloured pill per state: here the page has one rail, one continuum, and one binding strip, and a state is read as a mark's form. What it must prove is that a saved choice and an adopted runtime are different facts, visible at a glance, without reading a sentence.
+THESIS: This is a workbench for a catalogue, not a dashboard about a system. It refuses the previous instrument-panel world (spectrum lines, calibration bands, dials, state-as-line-form) and refuses the generic admin dashboard (hero metrics, card grid, coloured pills for everything). What it must prove: a model's declared capabilities and efforts are the same facts the subagent can actually choose, and a saved change is not the same fact as a running one.
 
-OWN-WORLD: A charcoal continuum (banded, procedural, four steps of near-black) with bone type; colour exists only as seven hairline emission lines (405 violet, 436 indigo, 486 cyan, 546 green, 589 sodium, 615 orange, 656 deep red) used as measurement, never as decoration. Structure is drawn, not boxed: 1px hairlines, corner registration ticks, uppercase micro-labels at 0.16em, one grotesque at one size ranked by tracking and ink. Controls are ruled rows and outline rectangles with squared corners; the primary action is a doubled hairline with a filled arrow. Icons are one authored 16px stroke set at 1.25.
+OWN-WORLD: A light, cool-grey workbench built from white surfaces, 1px hairlines, 8–12px radii and one clear blue for the primary action. Type is the platform UI sans at 14px with a 12.5px label tier and tabular numerals; monospace is reserved for identifiers, URLs, codes and measurements. Hierarchy comes from spacing and weight, not from colour blocks: neutral tags, one blue accent, and three semantic tones (green settled, amber pending, red failed) used only as a dot plus a word. Structure is a fixed left rail of four views against a single working surface; a catalogue table is the centre of gravity; editing happens in a right inspector alongside the table, stacking below it on narrow screens.
 
-STORY: The visitor understands, in order: the gateway is up and how many models it carries; the configuration file is ready or not; which model and effort is saved; which model and effort the native runtime actually adopted; and whether those two agree. Then they search the catalogue, draft a target, and apply — or restore inherit. They leave knowing that a draft is not saved, that saved is not adopted, and exactly which action closes the gap.
+STORY: In order — the gateway is up and how many models it carries; whether the configuration is ready or waiting for a restart; which subagent target is saved and which one the runtime adopted; whether traffic is actually flowing (real counters); then the catalogue, where each row states protocol, limits, declared tools/reasoning/vision and declared efforts, and can be edited with a full-catalogue save; then the subagent choice, restricted to what the selected model declares; then the connection form, its environment-variable status, the restart instruction, and the two diagnostics with their last result.
 
-FIRST VIEWPORT: At 1440 the page is one plate. A 232px off-centre rail runs down the left, carrying identity, the gateway readout, the configuration line, the runtime line, and the operation console; a landing tick marks the current section. To its right, the top register is the binding strip: `已保存` on the left register, `实际采用` on the right register, both set on the same rule, with the verdict word between them; under it sits a continuous context-window calibration band spanning the full width, with the saved target marked on it. Below, the subagent plate: mode segmented as two ruled options, an effort readout board, then the model catalogue — a searchable list of ruled rows, each with its emission tick, protocol, context, tools and reasoning. The apply bar is pinned at the plate's foot with the primary doubled-line action on the right.
+FIRST VIEWPORT: At 1440 the shell is a 232px rail and a 1152px work surface. The rail carries the mark, the four views, the gateway readout and the appearance picker. The surface opens on 概览 with the page title, a hairline status panel of four labelled facts (gateway, catalogue, runtime, configuration), then the two-column saved/adopted panel with a single verdict line, then request counters and a compact recent-request table. No card grid, no dial, no gradient.
 
-FORM: Direction 6 of 7 grounded candidates (assigned), seed key 4e6c22b7. Raised by the hand it beat, named lines: from the design annual (declined on audience identification) — **registration discipline**: every plate corner carries a crosshair tick and every value sits in a tabular column, so measurement, not mood, holds the grid; from the boarding pass and gate board (declined on product clarity) — **rerank in place**: when the saved target changes, its mark slides along the calibration band and holds a lit state until noticed, and no row is removed and re-created.
+FORM: Direction 3 of 7 grounded candidates (assigned), seed key cb6aaf97 — 模型工作台. Raised by the hands it beat, named lines: from the network manager (declined on product scope) — **status as a labelled fact list**, where a state is a dot and a word in a row, never a coloured card; from the data-table editor (declined on rigidity) — **edit in place of context**, where the row stays visible while its inspector is open, so the operator never loses which model is being changed.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
