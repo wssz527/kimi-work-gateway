@@ -20,7 +20,7 @@ function fixture(source = structuralKernel) {
   fs.mkdirSync(path.dirname(kernel), { recursive: true });
   fs.writeFileSync(kernel, source); fs.writeFileSync(archive, 'synthetic'); fs.writeFileSync(application, 'synthetic');
   const installation = { version: '99.3.0', archive, application, bundleDir, platform: process.platform };
-  const runtime = new SubagentRuntime({ stateDir }); runtime.installation = () => ({ ...installation });
+  const runtime = new SubagentRuntime({ stateDir, launchProbe: () => ({ state: 'supported' }) }); runtime.installation = () => ({ ...installation });
   const policy = new SubagentPolicy({ stateDir, kimiDir: path.join(root, 'kimi') });
   policy.configure({ mode: 'force', model: models[0].id }, models);
   return { root, runtime, policy, kernel, installation };

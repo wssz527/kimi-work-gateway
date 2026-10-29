@@ -713,6 +713,24 @@ test('subagents-prepare keeps an existing policy for the same scope and refuses 
   } finally { clean(dir, kimiDir, otherDir); }
 }, 20000);
 
+test('unsupported desktop launch contracts return exit 9 for prepare, status and launch', async () => {
+  const dir = tempDir(), kimiDir = tempDir();
+  const overrides = fakeRuntime();
+  overrides.SubagentRuntime = class {
+    inspect() { return { state: 'unsupported', reason: 'packaged_bundle_override_disabled' }; }
+    prepare() { throw Error('subagent_launch_unsupported'); }
+    launch() { throw Error('must not launch'); }
+  };
+  try {
+    for (const command of ['subagents-prepare', 'subagents-status', 'subagents-launch']) {
+      const io = capture();
+      expect(await run([command, '--state-dir', dir, '--kimi-dir', kimiDir], {}, io, overrides)).toBe(9);
+      if (command === 'subagents-status') expect(JSON.parse(io.lines.out.at(-1)).runtime.reason).toBe('packaged_bundle_override_disabled');
+      else expect(io.lines.err.join('\n')).toContain('subagent_launch_unsupported');
+    }
+  } finally { clean(dir, kimiDir); }
+});
+
 test('subagents-prepare reports an incompatible runtime as exit 9 and a broken file as exit 3', async () => {
   const dir = tempDir();
   const kimiDir = tempDir();
@@ -819,6 +837,7 @@ test('subagents-launch starts a prepared runtime and reports where Kimi must exi
     expect(JSON.parse(io.lines.out.at(-1)).runtime).toEqual({ state: 'starting', pid: 4242, runtimeId: 'a'.repeat(24) });
     // The runtime is checked first so an unusable one fails before it is launched.
     expect(starting.log.map(row => row.kind)).toEqual(['options', 'inspect', 'launch']);
+    expect(starting.log.at(-1).options.protectedEnvNames).toEqual(['KIMI_WORK_UPSTREAM_KEY', 'KIMI_WORK_GATEWAY_TOKEN', 'KIMI_WORK_TRANSLATION_API_KEY']);
     // --archive and --kimi-dir are per-invocation: they reach the runtime once
     // and are not remembered anywhere.
     expect(starting.log[0].options).toEqual({ stateDir: dir });
@@ -871,6 +890,7 @@ test('subagents-launch hands the adapted copy to Kimi through the runtime enviro
     const previous = process.env.DAIMON_BUNDLE_DIR;
     const real = (await import('../src/subagent-runtime.mjs')).SubagentRuntime;
     class Probed extends real {
+      constructor(options) { super({ ...options, launchProbe: () => ({ state: 'supported' }) }); }
       inspect() { return { state: 'waiting-launch' }; }
       async launch({ spawnApp } = {}) {
         return super.launch({ isRunning: () => false, spawnApp: (command, args, options) => {

@@ -54,7 +54,7 @@ test('gateway revocation blocks a stale forced model and closing restores inheri
     defaultModel: 'byok-kth-kimi/vendor/kimi-child', defaultEffort: 'low' });
   expect(() => policy.configure({ mode: 'force', model: models[0].id }, [models[1]])).toThrow('subagent_model_unavailable');
   const blockedConfig = { get: () => hook.configuration(policy.homeDir) };
-  expect(blockedConfig.get()).toEqual({ models: {} });
+  expect(blockedConfig.get()).toEqual({});
   expect(() => hook.assertSpawn(blockedConfig, {})).toThrow('subagent_model_unavailable');
   expect(() => hook.assertModel(blockedConfig, 'parent')).toThrow('subagent_model_unavailable');
   policy.close();
@@ -91,11 +91,11 @@ test('force refuses fork and resumed agents bound to another model', () => {
 test('malformed or missing policy keeps model discovery safe and rejects actual subagent runs', () => {
   const { policy, hook, receiptPath } = setup();
   const config = { get: () => hook.configuration(policy.homeDir) };
-  expect(config.get()).toEqual({ models: {} });
+  expect(config.get()).toEqual({});
   expect(() => hook.assertSpawn(config, { model: 'primary' })).toThrow('subagent_policy_unavailable');
   policy.configure(undefined, models);
   fs.writeFileSync(policy.file, '{broken');
-  expect(config.get()).toEqual({ models: {} });
+  expect(config.get()).toEqual({});
   expect(() => hook.assertModel(config, 'parent')).toThrow('subagent_policy_unavailable');
   expect(readSubagentJSON(receiptPath).mode).toBe('blocked');
   expect(() => policy.configure(undefined, models)).toThrow();
@@ -135,7 +135,7 @@ test('unrecognized kernel layouts are refused before any transformation is retur
 
 test('runtime status distinguishes missing and malformed state', () => {
   const { stateDir } = setup();
-  const runtime = new SubagentRuntime({ stateDir });
+  const runtime = new SubagentRuntime({ stateDir, launchProbe: () => ({ state: 'supported' }) });
   expect(runtime.inspect()).toEqual({ state: 'not-prepared' });
   fs.mkdirSync(stateDir);
   fs.writeFileSync(runtime.manifestFile, '{broken');
@@ -145,7 +145,7 @@ test('runtime status distinguishes missing and malformed state', () => {
 test('launch waits for Kimi exit and passes the override only to the new process', async () => {
   const { stateDir, root, policy } = setup();
   policy.configure(undefined, models);
-  const runtime = new SubagentRuntime({ stateDir });
+  const runtime = new SubagentRuntime({ stateDir, launchProbe: () => ({ state: 'supported' }) });
   const application = path.join(root, 'Kimi');
   fs.writeFileSync(application, 'fixture');
   writeSubagentJSON(runtime.manifestFile, { application, bundleDir: path.join(root, 'bundle'), runtimeId: 'a'.repeat(24) });
@@ -187,7 +187,7 @@ test('bundle archive links are refused before extraction can follow their target
     fs.writeFileSync(tarball, gzipSync(Buffer.concat([
       archiveHeader('escape', type, outside), archiveHeader('escape/keep', '0'), Buffer.alloc(1024),
     ])));
-    const runtime = new SubagentRuntime({ stateDir });
+    const runtime = new SubagentRuntime({ stateDir, launchProbe: () => ({ state: 'supported' }) });
     runtime.installation = () => ({ tarball, version: 'fixture' });
     expect(() => runtime.prepare()).toThrow('subagent_bundle_archive_links_unsupported');
     expect(fs.readFileSync(path.join(outside, 'keep'), 'utf8')).toBe('untouched');
@@ -200,7 +200,7 @@ test('unrecognised source structure is refused and staging directories are remov
   const bundleDir = path.join(root, 'source');
   const kernel = path.join(bundleDir, 'app/daimon/dist/kimi-code-v2/kernel-bundle.mjs');
   fs.mkdirSync(path.dirname(kernel), { recursive: true }); fs.writeFileSync(kernel, 'unknown kernel');
-  const runtime = new SubagentRuntime({ stateDir });
+  const runtime = new SubagentRuntime({ stateDir, launchProbe: () => ({ state: 'supported' }) });
   runtime.installation = () => ({ bundleDir, version: '999.0.0' });
   expect(() => runtime.prepare()).toThrow('subagent_runtime_incompatible');
   expect(fs.existsSync(runtime.manifestFile)).toBe(false);

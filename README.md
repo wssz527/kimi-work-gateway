@@ -18,20 +18,20 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 
 ## 安装与首次使用
 
-需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。基础接入、强制子代理和思考翻译都优先按实际接入口检查兼容性，版本号变化不会单独禁用功能；Kimi Code 不适用。真实桌面实测基线为 Kimi 3.2.21，其他版本以结构探测和运行回执为准。
+需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。兼容检查依据解析器、运行时结构和实际启动能力，不以版本号白名单决定。思考翻译需 Work 渲染器确认；严格子代理控制还需桌面应用允许加载适配副本。当前正式版 Kimi 3.2.21 会忽略该副本路径，因此报告 `unsupported / packaged_bundle_override_disabled`，不能宣称强制策略已生效。Kimi Code 不适用。
 
 ### 1. 一条命令安装
 
 macOS 终端：
 
 ```sh
-npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.3/kimi-work-gateway-0.6.3.tgz"
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.4/kimi-work-gateway-0.6.4.tgz"
 ```
 
 Windows PowerShell：
 
 ```powershell
-npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.3/kimi-work-gateway-0.6.3.tgz"
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.4/kimi-work-gateway-0.6.4.tgz"
 ```
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
@@ -102,7 +102,7 @@ kimi-work-gateway.cmd panel --config gateway.json
 - 日常使用需保持 `panel` 或 `serve` 运行；关掉终端会停止模型网关。没有自动开机启动、系统托盘或后台服务，关闭浏览器标签不会停止网关。
 - 不要同时启用独立网关和 Magpie 的 Kimi Work 插件占用同一组默认端口；它们的网关 Token 和状态目录也不同，切换来源后需在 Kimi 重新导入。
 - 更新时先停止旧网关，用新 Release 的完整包地址重跑安装命令，再以原来的配置路径和凭证启动。配置与状态不在 npm 安装目录，包更新会保留它们；发行前后均应检查 Kimi 的版本兼容范围。
-- 卸载前先按[断开](#断开)撤销系统解析，再执行 `npm uninstall --global kimi-work-gateway`（PowerShell 用 `npm.cmd`）。卸载包不会自动撤销解析或删除用户配置。
+- 卸载前先按[断开](#断开)撤销系统解析，再执行 `npm uninstall --global kimi-work-gateway`（PowerShell 用 `npm.cmd`）。卸载包不会自动撤销解析或删除用户配置。若使用过内置更新或回退，相关副本仍保存在 `~/.config/kimi-work-gateway/program-updates/`；自定义 `KIMI_WORK_GATEWAY_UPDATE_DIR` 时则位于该目录。确认不再需要回退后手动删除对应更新目录，避免卸载后旧副本继续占用空间；适配副本的移除见[断开](#断开)。
 - 不分享 API Key、Token、带 `#key=` 的面板链接、账号文件或真实状态目录；给别人的是仓库或 Release 链接，让对方使用自己的上游与凭证。
 
 准备在你的机器上具体做了什么：
@@ -131,7 +131,7 @@ kimi-work-gateway panel --config gateway.json
 - **子代理与运行时**：选择继承主模型或指定支持工具的模型。已保存目标、当前策略与运行时证据分别显示；匹配副本的进程、心跳、策略版本和目标一致后才显示采用。切换只影响后续新建子代理，主模型仍在 Kimi Work 菜单里选择。
 - **连接设置**：编辑上游 Base URL、凭证的环境变量名称、监听端口与 DNS 配置。只保存变量名，密钥值继续放在启动环境。连接修改需停止并重新运行 `panel`；面板会分别显示当前运行值和已保存值，待重启期间禁止继续修改模型和子代理，防止误写。
 - **诊断与请求**：检查上游只发送一次认证的 `GET /models`；兼容检查只读本机 Kimi 目录解析器。检查通过不代表实际推理成功。概览统计本进程收到的有效认证推理请求，显示次数、失败、最近 20 条模型/协议/HTTP 结果/耗时；重启清零，不记录对话、图片、响应正文，不估算 token 或费用。Magpie 模式的用量继续在 Magpie 查看。
-- **准备、启动与 Token**：保留运行时副本准备、启动适配 Kimi、原生接入准备、撤销解析及服务端复制 Token。管理员操作交给系统授权；已运行 Kimi 时提示先正常退出，不结束进程、不自动重试。Token 值不会发给页面。
+- **准备、启动与 Token**：保留运行时副本准备、启动 Kimi、原生接入准备、撤销解析及服务端复制 Token。翻译关闭且子代理为继承模式时，“启动 Kimi”直接打开原版应用，不加载副本；强制子代理模式仍要求适配副本与启动契约可用，不会静默丢弃强制目标。管理员操作交给系统授权；已运行 Kimi 时提示先正常退出，不结束进程、不自动重试。Token 值不会发给页面。
 
 `panel` 必须使用实际 JSON 文件，不接受 `--config -`。保存会保留原配置的未知字段；多个页面同时保存会提示版本冲突。手动在外部更改基础配置仍需重启。退出命令会关闭两个监听并按归属恢复继承。
 
@@ -174,11 +174,11 @@ kimi-work-gateway panel --config gateway.json
 
 翻译入口由 `panel` 提供；单独的 `serve` 或 `subagents-launch` 不会启动翻译宿主。设置保存与实际注入分别显示，只有 Work 渲染器确认后才显示生效。Kimi 思考区域提供 **译文 / 原文 / 重译**，折叠随原思考区域同步；停用设置后恢复原文。关闭面板标签不影响翻译；退出网关后已启动的会话宿主继续服务该 Kimi，重启同一状态目录的面板可继续管理。Kimi 退出后宿主自动结束。
 
-翻译按普通 Kimi 的实际 Work 页面、私有 CDP 协议和渲染器确认判断，不再使用 Kimi 版本白名单；没有思考内容时等待内容。它不适用于 Kimi Code，通过随启动建立的私有 CDP pipe 注入，不暴露调试 TCP 端口、不提供任意脚本 HTTP 接口、不修改安装包或签名。若仍从任务 3 的旧翻译启动器进入，会提示旧实例存在；请退出后使用网关的新入口。原文和译文仅在页面有界内存中缓存，不写入 localStorage 或网关状态文件。
+翻译按普通 Kimi Work 页面的私有管道、渲染器协议和 DOM 结构确认能力；版本号仅展示，未知版本会标记待验证，不因版本号拒绝启动。不适用于 Kimi Code。它不暴露调试 TCP 端口、不提供任意脚本 HTTP 接口、不修改安装包或签名。流式正文稳定后才发起翻译，并提供匹配块计数用于识别界面结构变化。重复注入时，网关先释放有 `dispose()` 的 v4 旧引擎；无法安全释放的 v3 保持 `legacy-running`。旧启动器发现网关引擎后让位。原文和译文仅在页面有界内存中缓存，不写入 localStorage 或网关状态文件。翻译 Key、上游 Key 与本地 Token 不传给 Kimi 子进程；结构环境变量不能作为翻译 Key 名称。
 
 ## 跨版本与 GitHub 更新
 
-**优先继续使用当前版本。** Kimi 的版本号或整份源码摘要变化不会单独触发“不支持”。子代理准备会按配置读取、创建、运行和模型档案接点检查结构，并记录摘要以验证副本完整性；启动时若安装来源已更新，会按新来源自动准备本地副本。只有接点真正缺失或歧义才拒绝该适配，普通模型网关可继续运行。翻译同样以实际协议和页面回执为准。结构保持兼容时，无需跟着 Kimi 升级本工具；结构真正改变时再检查本项目更新。
+**优先继续使用当前版本。** Kimi 的版本号或整份源码摘要变化不会单独触发“不支持”。子代理准备会按配置读取、创建、运行和模型档案接点检查结构，并记录摘要以验证副本完整性；启动时若安装来源已更新，会按新来源自动准备本地副本。只有接点真正缺失、歧义或正式应用启动契约不可用才拒绝该适配，普通模型网关可继续运行。翻译同样以实际协议和页面回执为准。结构保持兼容且应用允许加载副本时，无需跟着 Kimi 升级本工具；结构真正改变时再检查本项目更新。
 
 从 v0.6.0 起，可在 **连接与诊断 → 程序更新** 中检查 GitHub 最新稳定版、下载更新或回退。命令行也可使用：
 
@@ -190,7 +190,7 @@ kimi-work-gateway rollback-update
 
 Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 API Key，也不修改模型配置或 Kimi 设置；旧版没有更新命令，需先按安装命令升级到 v0.6.0 一次。
 
-更新来自 `wssz527/kimi-work-gateway` 的 GitHub 稳定 Release。发现最新稳定版本依次尝试三条路径：本机 `git ls-remote`、仓库的静态发行 feed（`releases.atom`）、最后才是 GitHub API。前两条都是匿名的静态文件读取，不需要账号、不需要 Git，也不消耗任何人的 API 配额；只有前两条都不可用时才调用 API，而那时使用的是**运行者本机 IP 自己的**匿名配额，与项目作者无关。拿到标签后仍按该标签读取 `SHA256SUMS`，确认安装包存在并取得摘要。下载、归档路径和 SHA-256 校验成功后才切换用户状态目录中的程序版本，保留上一版本供回退；网络错误、限流或校验失败会保留当前版本。更新与回退均在**下次启动网关**时生效，当前进程不会自动重启，也不会结束 Kimi。重启时继续使用原来的配置路径和环境变量。没有新版本时无需更新，不会强制降级。
+更新来自 `wssz527/kimi-work-gateway` 的 GitHub 稳定 Release。发现最新稳定版本依次尝试三条路径：本机 `git ls-remote`、仓库的静态发行 feed（`releases.atom`）、最后才是 GitHub API。前两条都是匿名的静态文件读取，不需要账号，也不消耗任何人的 API 配额；只有本机有 Git 时才使用第一条，前两条都不可用时才调用 API，而那时使用的是**运行者本机 IP 自己的**匿名配额，与项目作者无关。拿到标签后仍按该标签读取 `SHA256SUMS`，确认安装包存在并取得摘要。下载、归档路径和 SHA-256 校验成功后才切换用户状态目录中的程序版本，保留上一版本供回退；网络错误、限流或校验失败会保留当前版本。更新与回退均在**下次启动网关**时生效，当前进程不会自动重启，也不会结束 Kimi。重启时继续使用原来的配置路径和环境变量。没有新版本时无需更新，不会强制降级。
 
 更新状态通过 `GET /api/state` 的 `updates` 返回：`currentVersion` 是当前运行版本，`latestVersion` 是上次检查的稳定版，`pendingVersion` 是下次启动采用的版本，`rollbackVersion` 是可回退版本。`state` 为 `not-checked`、`checking`、`current`、`available`、`staged` 或 `failed`，另有可选 `checkedAt`、`releaseURL` 和 `reason`。面板操作仍经带 ID 去重的 `POST /api/actions`，新增 `check-update`、`install-update`、`rollback-update`。
 
@@ -233,8 +233,8 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 
 默认情况下 Work 里的子代理沿用主模型。如果希望子代理固定走另一个模型，本工具提供一条**内部、非官方**的适配路径：
 
-- Kimi 从**本地运行时副本**加载适配代码：`subagents-launch` 为本次 Kimi 进程设置 `DAIMON_BUNDLE_DIR`，指向状态目录里的副本。`serve` 负责保存策略和转发请求，**不修改 Kimi 安装目录、`app.asar`、可执行文件或签名**。
-- 按**实际结构接点**判断：配置读取、子代理创建、运行入口和模型档案服务都要唯一匹配；缺失或有多个候选时 `subagents-prepare` 明确拒绝（退出码 9），不会猜测或强行改写。版本号与内核摘要只用于展示和副本完整性校验。
+- `subagents-launch` 为本次进程设置 `DAIMON_BUNDLE_DIR`，指向本地适配副本。准备前会执行正式应用的启动接口探针；应用忽略该变量时直接报告 `unsupported`。**当前正式版 Kimi 3.2.21 属于此情况，以下流程需启动能力检查通过后才可使用。** 不自动迁移为原生 TOML 配置，避免放松 fork/resume 的严格约束。
+- 内核按配置读取、依赖注入、子代理创建与恢复结构定位，并用真实内核行为回归和生成代码语法检查验证守卫。未知版本可通过这些检查；无法确认结构和行为时拒绝准备。`serve` 负责策略和转发，不修改 Kimi 安装目录、`app.asar`、可执行文件或签名。
 - 主模型仍由 Work 菜单选择；这里只影响子代理。
 
 配置里加一段 `subagents`（模型必须已在本工具的 `models` 中声明且带 `tools`；要写 `effort` 时该模型还须声明 `reasoningEfforts`）：
@@ -279,9 +279,10 @@ kimi-work-gateway subagents-launch
 
 注意事项：
 
-- 这是**内部、非官方适配**，依赖 Work 内核的具体实现。许可门槛是**结构接点**，不是 Kimi 版本号或内核摘要：配置读取、子代理创建、运行入口和模型档案服务都需唯一匹配；结构保持兼容时，Kimi 升级后重新准备即可继续使用。内核 SHA-256 只用于展示和副本完整性校验。
-- 退出码：`0` 成功或“需先退出 Kimi”，`3` 失败或冲突（含策略文件损坏、作用域冲突、目标被阻止、来源不可用或心跳过期），`9` 结构接点缺失或存在多个候选，适配被明确拒绝。
+- 这是**内部、非官方适配**。源码、hook、适配器版本共同标识副本；宿主升级或适配代码变化后旧副本标记 `outdated`，不自动删除可能仍在运行的目录。哈希用于完整性检查，不是兼容版本白名单。
+- `unsupported` 表示正式应用的启动契约不可用；`scope-conflict` 表示实际作用域与策略不匹配。退出码：`0` 成功或“需先退出 Kimi”，`3` 失败或冲突，`9` 内核结构、注入行为或应用启动契约不受支持。
 - `subagents-status` 只读，不会创建策略文件；`subagents-prepare`/`subagents-launch` 在策略文件缺失时会写入 `inherit`，已存在则保留并校验它属于当前 Kimi 作用域。跨作用域和坏策略会明确报告，不会覆盖。
+- 独立 CLI 的 `subagents-launch` 不读取 `gateway.json`，只清理默认的 `KIMI_WORK_UPSTREAM_KEY`、`KIMI_WORK_GATEWAY_TOKEN` 和 `KIMI_WORK_TRANSLATION_API_KEY`。自定义上游、Token 或翻译凭证变量名时，请通过已加载该配置的 `panel` 启动，避免这些自定义变量被 Kimi 子进程继承。
 - `loaded` 表示匹配运行时、存活进程、有效心跳和当前策略版本已确认；需同时检查 `mode`，它可以是 `force`、`inherit` 或 `blocked`。`prepared` 和 `waiting-launch` 不表示强制策略已生效，`starting` 只表示启动请求已发出。
 - `pending-policy` 表示运行时在等待读取新策略；`policy-unavailable` 表示运行时仍在但策略无法读取，主会话保持可用、子代理被拒绝。`heartbeat-stale` 表示匹配进程仍在但心跳过期，不代表应再次启动。`unavailable`、`outdated`、`conflict` 分别说明来源不可用、来源已变化和副本/状态文件冲突。
 
@@ -340,7 +341,7 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 - 首次接入需要管理员授权（macOS resolver / Windows hosts）。准备只有在操作完成且验证成功后才记为 `done`；裁决缺失会记为失败。
 - Windows prepare 可使用已存在的手工同值条目，撤销时保留该条目；只删除标记与内容完整匹配的归属条目对。BOM、原换行和无末尾换行的内容保留；不支持的编码拒绝改写。
 - 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
-- 子代理控制是内部、非官方适配，按实际结构判断兼容性；结构接点缺失或歧义时拒绝准备，不会猜测或强行改写。
+- 子代理控制是内部、非官方适配，按结构与实际启动能力检查；当前正式版 Kimi 3.2.21 不允许该副本加载路径。跨版本合成检查不保证所有未来版本可用。
 - Windows 真机已验证 CLI、Node/HTTP 流程及临时 hosts 文件的实际 PowerShell 编辑，并在官方普通 Kimi 3.2.21 的隔离用户目录中验证私有 CDP 管道与 Work 渲染器挂载。**真实 UAC、真实 hosts 修改与登录后的完整 Work 桌面流程仍未联合验收**；分层结果以发行说明为准。
 - 原生内核回归与翻译界面测试使用隔离目录、合成文本及本地模拟上游，覆盖模型绑定、恢复、坏策略和译文生命周期。它们不产生付费推理，也不能代替登录桌面后的整条调用链验证。
 
@@ -358,7 +359,7 @@ bun scripts/verify-package.mjs  # 打包、解包并在包内重跑测试和检�
 
 发布包包含 `test/`。测试使用合成凭证与临时文件，包含 Node CLI 的实际 HTTP 调用，以及无须安装 Kimi 的 20 组符号变化检查。安装了 Kimi 的 macOS 还会检查真实解析器；合成检查不保证未来版本兼容。CI 配置在 Ubuntu 上覆盖两个 Bun 版本，在 Windows 上执行专用脚本用例和包内自验；修改工作流后需要实际运行才能确认本次 Windows 结果。
 
-子代理相关测试分两层：`test/cli.test.mjs` 与 `test/subagents.test.mjs` 用注入的替身覆盖策略与运行时契约，不启动 Kimi；`test/subagent-native.test.mjs` 在装有受支持 Kimi 的 macOS 上运行原生用例——在本机真实 Work 内核加本地 mock 上游上完成“父 A → 子 B → 父 A”、Chat 与 Responses 两种协议、effort 传递、配置重建、关闭恢复继承、fork 与 resume 拒绝，全程不产生付费调用。该原生用例在缺少受支持 Kimi 或 Node 版本不足时跳过，跳过不等于通过。
+子代理测试分开验证结构、守卫、运行时状态与应用启动契约。`test/subagent-native.test.mjs` 在安装 Kimi 且有 Node 24 的环境中，直接导入适配后的真实内核，经本地模拟上游完成 12 个模型绑定、协议、effort、配置重建和 fork/resume 场景。该夹具显式绕过桌面启动探针，只证明内核适配，不能证明正式 App 加载了副本；真实启动能力由独立探针检查。不产生付费推理，缺少环境时跳过也不等于通过。
 
 ## 来源与许可证
 

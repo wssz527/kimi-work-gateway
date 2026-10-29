@@ -19,8 +19,9 @@ function fixture(overrides = {}) {
   const runtime = new TranslationRuntime({ stateDir: dir, kimiDir: path.join(dir, 'kimi') });
   runtime.configure({ enabled: true });
   const id = crypto.randomUUID();
+  const application = path.join(dir, ...(process.platform === 'darwin' ? ['MacOS', 'Kimi'] : ['Kimi.exe']));
   const request = { schemaVersion: 1, id, pid: process.pid, homeDir: runtime.homeDir,
-    application: path.join(dir, 'Kimi'), version: '3.2.21' };
+    application, version: '3.2.21', archive: path.join(dir, 'Resources', 'app.asar'), discoveredApplication: application };
   writeSubagentJSON(runtime.launchFile, request);
   const context = vm.createContext({ Map });
   const calls = [];
@@ -123,7 +124,9 @@ test('host rejects invalid binding payloads and returns only safe error codes', 
 test('session launches a private pipe, keeps translation credentials in the host and exits without terminating Kimi', async () => {
   const child = new EventEmitter(); child.pid = 4242; child.stdio = [null, null, null, {}, {}];
   let launch;
-  const f = fixture({ env: { KIMI_WORK_TRANSLATION_API_KEY: 'host-only-key', ELECTRON_RUN_AS_NODE: '1', SAFE_TEST: 'yes' },
+  const f = fixture({ env: { KIMI_WORK_TRANSLATION_API_KEY: 'host-only-key', ELECTRON_RUN_AS_NODE: '1', SAFE_TEST: 'yes',
+    GATEWAY_UPSTREAM_KEY: 'upstream-secret', KIMI_WORK_GATEWAY_TOKEN: 'panel-secret', PATH: '/usr/bin:/bin' },
+    protectedEnvNames: ['GATEWAY_UPSTREAM_KEY', 'KIMI_WORK_GATEWAY_TOKEN'],
     spawnApp: (...args) => { launch = args; process.nextTick(() => child.emit('spawn')); return child; },
     pipeFactory: () => f.pipe });
   f.pipe.targets = [];
@@ -136,8 +139,38 @@ test('session launches a private pipe, keeps translation credentials in the host
   expect(launch[2].env.KIMI_WORK_TRANSLATION_API_KEY).toBeUndefined();
   expect(launch[2].env.ELECTRON_RUN_AS_NODE).toBeUndefined();
   expect(launch[2].env.SAFE_TEST).toBe('yes');
+  // Gateway credential names are stripped from the Kimi child environment by
+  // explicit name; structural variables survive untouched.
+  expect(launch[2].env.GATEWAY_UPSTREAM_KEY).toBeUndefined();
+  expect(launch[2].env.KIMI_WORK_GATEWAY_TOKEN).toBeUndefined();
+  expect(launch[2].env.PATH).toBe('/usr/bin:/bin');
   expect(child.kill).toBeUndefined();
   child.emit('exit', 0); await run;
   expect(readSubagentJSON(f.runtime.receiptFile).state).toBe('exited');
   expect(fs.existsSync(f.runtime.launchFile)).toBe(false);
+});
+
+// A launch record may only be replayed against the very build it was created
+// from. The version string never binds anything; a mismatched application path
+// or a record without archive provenance fails closed.
+test('a launch record is rejected unless it matches the same discovered installation', async () => {
+  const child = new EventEmitter(); child.pid = 4242; child.stdio = [null, null, null, {}, {}];
+  const f = fixture({ spawnApp: () => { process.nextTick(() => child.emit('spawn')); return child; }, pipeFactory: () => f.pipe });
+  f.pipe.targets = [];
+  const run = f.session.run();
+  await new Promise(resolve => setImmediate(resolve));
+  child.emit('exit', 0); await run;
+  expect(readSubagentJSON(f.runtime.receiptFile).state).toBe('exited');
+
+  for (const mutation of [
+    { application: path.join(f.dir, 'elsewhere', 'Kimi') },
+    { discoveredApplication: path.join(f.dir, 'elsewhere', 'Kimi') },
+    { archive: undefined },
+    { version: '' },
+  ]) {
+    const id = crypto.randomUUID();
+    writeSubagentJSON(f.runtime.launchFile, { ...f.request, id, pid: process.pid, at: Date.now(), ...mutation });
+    const session = new TranslationSession({ stateDir: f.dir, id, spawnApp: () => child, pipeFactory: () => f.pipe });
+    await expect(session.run()).rejects.toThrow('translation_launch_invalid');
+  }
 });

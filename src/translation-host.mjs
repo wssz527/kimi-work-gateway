@@ -3,7 +3,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readSubagentJSON, writeSubagentJSON } from './subagent-policy.mjs';
-import { readTranslationSettings, translationAlive } from './translation-runtime.mjs';
+import { readTranslationSettings, translationAlive, sameInstallation } from './translation-runtime.mjs';
+import { reservedEnvName } from './translation-config.mjs';
 import { TranslationPipe } from './translation-pipe.mjs';
 import { translateReasoning } from './translation-service.mjs';
 
@@ -21,7 +22,8 @@ export function isTranslationTarget(target) {
 
 export class TranslationSession {
   constructor({ stateDir, id, env = process.env, spawnApp = spawn, translate = translateReasoning,
-    pipeFactory = (readable, writable) => new TranslationPipe(readable, writable), interval = 1000 } = {}) {
+    pipeFactory = (readable, writable) => new TranslationPipe(readable, writable), interval = 1000,
+    protectedEnvNames = [] } = {}) {
     this.stateDir = stateDir;
     this.id = id;
     this.env = env;
@@ -29,6 +31,7 @@ export class TranslationSession {
     this.translate = translate;
     this.pipeFactory = pipeFactory;
     this.interval = interval;
+    this.protectedEnvNames = protectedEnvNames.filter(name => typeof name === 'string' && name && !reservedEnvName(name));
     this.launchFile = path.join(stateDir, 'translation-launch.json');
     this.settingsFile = path.join(stateDir, 'translation-settings.json');
     this.receiptFile = path.join(stateDir, 'translation-runtime.json');
@@ -192,7 +195,10 @@ export class TranslationSession {
     if (this.request.schemaVersion !== 1 || this.request.id !== this.id || !path.isAbsolute(this.request.homeDir)
       || !path.isAbsolute(this.request.application) || typeof this.request.version !== 'string'
       || !this.request.version || this.request.version.length > 128 || /[\u0000-\u001f\u007f]/.test(this.request.version)
-      || !translationAlive(this.request.pid)) throw Error('translation_launch_invalid');
+      || !this.request.archive || !path.isAbsolute(this.request.archive)
+      || !translationAlive(this.request.pid) || !sameInstallation(this.request)) {
+      throw Error('translation_launch_invalid');
+    }
     const desired = readTranslationSettings(this.settingsFile, this.request.homeDir);
     this.settings = desired.settings;
     this.revision = desired.revision;
@@ -202,7 +208,10 @@ export class TranslationSession {
     if (this.request.userDataDir) args.push('--user-data-dir=' + this.request.userDataDir);
     const env = { ...this.env };
     delete env.ELECTRON_RUN_AS_NODE;
-    delete env[this.settings.apiKeyEnv];
+    const protectedNames = Array.isArray(this.request.protectedEnvNames) ? this.request.protectedEnvNames : [];
+    for (const name of [...this.protectedEnvNames, ...protectedNames, this.settings.apiKeyEnv]) {
+      if (typeof name === 'string' && !reservedEnvName(name)) delete env[name];
+    }
     if (this.request.bundleDir) env.DAIMON_BUNDLE_DIR = this.request.bundleDir;
     else delete env.DAIMON_BUNDLE_DIR;
     this.child = this.spawnApp(this.request.application, args, { env, detached: false,

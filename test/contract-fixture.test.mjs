@@ -42,12 +42,31 @@ test('synthetic parser discovery survives twenty deterministic symbol sets on ev
   }
 });
 
+test('parser result shape changes are unverified instead of throwing or certifying an empty result', () => {
+  const f = fixture();
+  try {
+    for (const replacement of ['return undefined;', 'return { models: [null], skippedModels };',
+      'return { models, skippedModels: [null] };', 'return { models: [{}], skippedModels };']) {
+      writeBundle(f.archive, bundleSource().replace('return { models, skippedModels };', replacement));
+      for (const models of [[], probeModels()]) {
+        expect(inspect({ archive: f.archive, models })).toMatchObject({ state: 'unverified', reason: 'parser_result_unrecognized' });
+      }
+    }
+  } finally { f.cleanup(); }
+});
+
 test('archive candidates include user installs and custom Program Files roots', () => {
   const candidates = archiveCandidates({ platform: 'win32', env: {
     LOCALAPPDATA: 'D:\\用户\\AppData\\Local', ProgramFiles: 'E:\\Programs',
   } });
   expect(candidates).toContain('D:\\用户\\AppData\\Local\\Programs\\Kimi\\resources\\app.asar');
   expect(candidates).toContain('E:\\Programs\\Kimi\\resources\\app.asar');
+});
+
+test('macos discovery includes the user application directory without changing the system preference', () => {
+  const candidates = archiveCandidates({ platform: 'darwin', env: { HOME: '/Users/用户' } });
+  expect(candidates[0]).toBe('/Applications/Kimi.app/Contents/Resources/app.asar');
+  expect(candidates).toContain('/Users/用户/Applications/Kimi.app/Contents/Resources/app.asar');
 });
 
 test('contract cache identity changes when an archive is replaced or removed', () => {

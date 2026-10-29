@@ -27,14 +27,15 @@ async function fixture({ force = false, translationRuntime } = {}) {
   const calls = [];
   const policy = new SubagentPolicy({ stateDir: dir, kimiDir: path.join(dir, 'kimi') });
   policy.configure(config.subagents, backend.models);
-  const runtime = { inspect: () => ({ state: 'not-prepared' }), launch: async () => { calls.push('plain-launch'); return { state: 'waiting-kimi-exit' }; } };
+  const runtime = { inspect: () => ({ state: 'not-prepared' }),
+    launch: async () => { calls.push('adapted-launch'); return { state: 'waiting-kimi-exit' }; },
+    launchOriginal: async () => { calls.push('original-launch'); return { state: 'starting', pid: 4242 } } };
   const translation = translationRuntime || {
     configure(value) { this.settings = normalizeTranslationConfig(value); },
     inspect: () => ({ state: 'not-started', internal: 'hidden' }),
     check: () => ({ state: 'not-started', version: '3.2.21' }),
     launch: async options => { calls.push(options); return { state: 'starting', pid: 4242, version: '3.2.21' }; },
-  };
-  const controller = new PanelController({ configFile: file, config, gateway, backend, stateDir: dir,
+  };  const controller = new PanelController({ configFile: file, config, gateway, backend, stateDir: dir,
     kimiDir: path.join(dir, 'kimi'), policy, runtime, translationRuntime: translation,
     env: { KIMI_WORK_TRANSLATION_API_KEY: 'private-translation-secret' },
     probe: { check: async () => ({ revealed: false }) } });
@@ -105,12 +106,29 @@ test('both launch actions use the translation host and preserve the force policy
     expect((await api(f, '/api/actions', request)).status).toBe(202);
   }
   expect(f.calls).toHaveLength(2);
-  for (const call of f.calls) expect(call).toEqual({ force: true, subagentRuntime: f.runtime });
+  for (const call of f.calls) {
+    expect(call).toMatchObject({ force: true, subagentRuntime: f.runtime });
+    expect(call.protectedEnvNames).toEqual(['TEST_KEY', 'KIMI_WORK_GATEWAY_TOKEN']);
+  }
   const response = await api(f, '/api/actions', intent('check-translation'));
   expect(response.status).toBe(202);
   await f.controller.operationTask;
   expect((await f.controller.state()).operation).toMatchObject({ state: 'not-started', version: '3.2.21' });
   expect(f.calls).toHaveLength(2);
+});
+
+test('plain launch starts original Kimi only in inherit mode and never drops a force policy', async () => {
+  const inherited = await fixture();
+  await api(inherited, '/api/actions', intent('launch-kimi'));
+  await inherited.controller.operationTask;
+  expect((await inherited.controller.state()).operation).toMatchObject({ state: 'starting' });
+  expect(inherited.calls).toEqual(['original-launch']);
+
+  const forced = await fixture({ force: true });
+  await api(forced, '/api/actions', intent('launch-kimi'));
+  await forced.controller.operationTask;
+  expect((await forced.controller.state()).operation.state).toBe('waiting-kimi-exit');
+  expect(forced.calls).toEqual(['adapted-launch']);
 });
 
 test('saved-but-unapplied translation settings are visible and can be reapplied after a runtime write failure', async () => {

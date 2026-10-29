@@ -52,6 +52,7 @@ class Node {
   set innerHTML(value) { this._innerHTMLTouched = true; throw Error('innerHTML must not be used'); }
 
   get firstChild() { return this.children[0] || null; }
+  get lastChild() { return this.children[this.children.length - 1] || null; }
   get isConnected() {
     let node = this;
     while (node.parentNode) node = node.parentNode;
@@ -229,7 +230,7 @@ function boot({ settings = { enabled: true, provider: 'bing', targetLanguage: 'z
   const self = {
     __kwgTranslationConfig: settings,
   };
-  if (legacy) self.__kctWork = { version: 3 };
+  if (legacy) self.__kctWork = typeof legacy === 'function' ? legacy(sandbox) : { version: 3 };
   Object.assign(sandbox, self);
   sandbox.globalThis = sandbox;
   Object.defineProperty(sandbox, 'window', { value: sandbox, configurable: true });
@@ -261,12 +262,12 @@ function boot({ settings = { enabled: true, provider: 'bing', targetLanguage: 'z
 
 test('the injection reports a real state and exposes the engine contract', () => {
   const disabled = boot({ settings: { enabled: false, provider: 'bing', targetLanguage: 'zh', view: 'translated' } });
-  expect(disabled.returned).toEqual({ state: 'inactive', version: 1 });
-  expect(disabled.engine.status()).toEqual({ state: 'inactive', version: 1 });
+  expect(disabled.returned).toMatchObject({ state: 'inactive', version: 1 });
+  expect(disabled.engine.status()).toMatchObject({ state: 'inactive', version: 1 });
   expect(disabled.document.querySelectorAll('.kwg-bar')).toHaveLength(0);
 
   const active = boot();
-  expect(active.returned).toEqual({ state: 'active', version: 1 });
+  expect(active.returned).toMatchObject({ state: 'active', version: 1 });
   expect(active.engine.version).toBe(1);
   expect(typeof active.engine.configure).toBe('function');
   expect(typeof active.engine.stop).toBe('function');
@@ -287,15 +288,38 @@ test('an existing task3 renderer is left untouched and reported as legacy-runnin
   expect(legacy.sandbox.__kctWork).toEqual({ version: 3 });
 });
 
+test('a disposable task3 engine is retired before the gateway mounts', async () => {
+  let disposed = 0;
+  const f = boot({ legacy: sandbox => ({ version: 4, dispose() {
+    disposed += 1;
+    delete sandbox.__kctWork;
+  } }) });
+  expect(disposed).toBe(1);
+  expect(f.sandbox.__kctWork).toBeUndefined();
+  expect(f.returned).toMatchObject({ state: 'active', version: 1 });
+  expect(f.document.querySelectorAll('.kwg-bar')).toHaveLength(1);
+  await f.clock.advance(2500);
+  expect(f.bindings).toHaveLength(1);
+});
+
+test('failed or incomplete task3 disposal keeps the gateway from mounting', () => {
+  for (const dispose of [() => { throw Error('cannot dispose'); }, () => {}]) {
+    const f = boot({ legacy: () => ({ version: 4, dispose }) });
+    expect(f.returned.state).toBe('legacy-running');
+    expect(f.document.querySelectorAll('.kwg-bar')).toHaveLength(0);
+    expect(f.bindings).toHaveLength(0);
+  }
+});
+
 test('only a settled block is sent, with its protected pre/code/a text', async () => {
   const streaming = boot({ label: '思考中', text: 'Still thinking.' });
-  await streaming.clock.advance(1000);
+  await streaming.clock.advance(2500);
   expect(streaming.bindings).toHaveLength(0);
 
   streaming.labelEl.textContent = '已完成思考';
   streaming.markdown.innerText = 'Finished thinking.';
   streaming.notify();
-  await streaming.clock.advance(1000);
+  await streaming.clock.advance(2500);
   expect(streaming.bindings).toHaveLength(1);
   const payload = streaming.bindings[0];
   expect(payload.type).toBe('translate');
@@ -309,7 +333,7 @@ test('only a settled block is sent, with its protected pre/code/a text', async (
 
 test('a reply paints plain text over the source, and the source stays hidden until switched back', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(1);
   const { id } = page.bindings[0];
 
@@ -338,13 +362,13 @@ test('a reply paints plain text over the source, and the source stays hidden unt
 
 test('a reply for replaced text never overwrites the current translation', async () => {
   const page = boot({ text: 'Version one.' });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(1);
   const first = page.bindings[0].id;
 
   page.markdown.innerText = 'Version two.';
   page.notify();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(2);
   const second = page.bindings[1].id;
   expect(first).not.toBe(second);
@@ -361,11 +385,11 @@ test('a reply for replaced text never overwrites the current translation', async
 
 test('a stale reply after a settings change is ignored, and the new language is requested', async () => {
   const page = boot({ text: 'Stable text.' });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   const oldId = page.bindings[0].id;
 
   page.engine.configure({ enabled: true, provider: 'google', targetLanguage: 'en', view: 'translated' });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(2);
   const newId = page.bindings[1].id;
   expect(newId).not.toBe(oldId);
@@ -382,7 +406,7 @@ test('a stale reply after a settings change is ignored, and the new language is 
 
 test('a host error shows a safe label, keeps the source, and never marks failure as success', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   page.receive(page.bindings[0].id, { error: 'translation_http_error' });
   await settle();
 
@@ -397,7 +421,7 @@ test('a host error shows a safe label, keeps the source, and never marks failure
 
 test('unknown, expired and malformed host replies are ignored without throwing', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(() => page.receive('kwg-unknown', { text: 'x' })).not.toThrow();
   expect(() => page.receive(undefined, { text: 'x' })).not.toThrow();
   expect(() => page.receive(page.bindings[0].id, 'not an object')).not.toThrow();
@@ -411,19 +435,19 @@ test('unknown, expired and malformed host replies are ignored without throwing',
 
 test('stop restores the original text and removes every node, observer and timer', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   page.receive(page.bindings[0].id, { text: '译文' });
   await settle();
   expect(page.document.querySelector('.kwg-translated').textContent).toBe('译文');
 
-  expect(page.engine.stop()).toEqual({ state: 'inactive', version: 1 });
+  expect(page.engine.stop()).toMatchObject({ state: 'inactive', version: 1 });
   expect(page.document.querySelectorAll('.kwg-bar')).toHaveLength(0);
   expect(page.document.querySelectorAll('.kwg-translated')).toHaveLength(0);
   expect(page.document.getElementById('kwg-style')).toBeNull();
   expect(page.block.classList.contains('kwg-hiding-source')).toBe(false);
   expect(page.observers.every(observer => observer.targets.length === 0)).toBe(true);
   expect(page.clock.pending()).toBe(0);
-  expect(page.engine.status()).toEqual({ state: 'inactive', version: 1 });
+  expect(page.engine.status()).toMatchObject({ state: 'inactive', version: 1 });
 
   page.markdown.innerText = 'Changed after stop.';
   page.clock.now();
@@ -434,34 +458,34 @@ test('stop restores the original text and removes every node, observer and timer
 
 test('configure can bring the renderer back and re-reads the bounded cache', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   page.receive(page.bindings[0].id, { text: '缓存译文' });
   await settle();
   page.engine.stop();
   expect(page.bindings).toHaveLength(1);
 
   expect(page.engine.configure({ enabled: true, provider: 'bing', targetLanguage: 'zh', view: 'translated' }))
-    .toEqual({ state: 'active', version: 1 });
+    .toMatchObject({ state: 'active', version: 1 });
   expect(page.document.querySelectorAll('.kwg-bar')).toHaveLength(1);
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(1);
   expect(page.document.querySelector('.kwg-translated').textContent).toBe('缓存译文');
 
   page.engine.stop();
-  expect(page.engine.configure({ enabled: false })).toEqual({ state: 'inactive', version: 1 });
+  expect(page.engine.configure({ enabled: false })).toMatchObject({ state: 'inactive', version: 1 });
   expect(page.document.querySelectorAll('.kwg-bar')).toHaveLength(0);
 });
 
 test('the retranslate button drops the cached value and asks the host again', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   page.receive(page.bindings[0].id, { text: '第一次' });
   await settle();
 
   const retranslate = page.document.querySelectorAll('.kwg-bar')[0].children[2];
   expect(retranslate.textContent).toBe('重译');
   retranslate.click();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(2);
   page.receive(page.bindings[1].id, { text: '第二次' });
   await settle();
@@ -470,14 +494,14 @@ test('the retranslate button drops the cached value and asks the host again', as
 
 test('a collapsed block keeps its translation and shows it again after expanding', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   page.receive(page.bindings[0].id, { text: '折叠译文' });
   await settle();
 
   page.summary.setAttribute('aria-expanded', 'false');
   page.wrap.remove();
   page.notify([{ target: page.block, type: 'childList' }]);
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.document.querySelector('.kwg-translated').textContent).toBe('折叠译文');
 
   const wrap = page.document.createElement('div');
@@ -492,14 +516,14 @@ test('a collapsed block keeps its translation and shows it again after expanding
   page.block.insertBefore(wrap, page.block.children[1] || null);
   page.summary.setAttribute('aria-expanded', 'true');
   page.notify([{ target: page.block, type: 'childList' }]);
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.document.querySelector('.kwg-translated').hidden).toBe(false);
   expect(page.bindings).toHaveLength(1);
 });
 
 test('re-injection stops the previous engine and leaves exactly one set of controls', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   page.receive(page.bindings[0].id, { text: '注入前译文' });
   await settle();
   expect(page.document.querySelectorAll('.kwg-bar')).toHaveLength(1);
@@ -509,13 +533,13 @@ test('re-injection stops the previous engine and leaves exactly one set of contr
   page.sandbox.__kwgTranslationConfig = { enabled: true, provider: 'bing', targetLanguage: 'zh', view: 'translated' };
   const returned = vm.runInNewContext(SOURCE, page.sandbox, { filename: 'translation-renderer.js' });
   await settle();
-  expect(returned).toEqual({ state: 'active', version: 1 });
+  expect(returned).toMatchObject({ state: 'active', version: 1 });
   expect(page.document.querySelectorAll('.kwg-bar')).toHaveLength(1);
   expect(page.document.querySelectorAll('#kwg-style')).toHaveLength(1);
   const observing = page.observers.filter(observer => observer.targets.length > 0);
   expect(observing).toHaveLength(1);
 
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   // The carried cache still answers the same text, so no second request is made.
   expect(page.bindings).toHaveLength(1);
   expect(page.document.querySelectorAll('.kwg-translated')).toHaveLength(1);
@@ -524,14 +548,14 @@ test('re-injection stops the previous engine and leaves exactly one set of contr
 
 test('a stop followed by an immediate re-enable never lets the old run paint or oversubscribe', async () => {
   const page = boot();
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(1);
   const oldId = page.bindings[0].id;
 
   page.engine.stop();
   expect(page.engine.configure({ enabled: true, provider: 'bing', targetLanguage: 'zh', view: 'translated' }))
-    .toEqual({ state: 'active', version: 1 });
-  await page.clock.advance(1000);
+    .toMatchObject({ state: 'active', version: 1 });
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(2);
   const newId = page.bindings[1].id;
   expect(newId).not.toBe(oldId);
@@ -576,7 +600,7 @@ test('late replies of a retired run cannot exceed the concurrency limit of the l
 
 test('a configure that changes provider or language starts a fresh scope', async () => {
   const page = boot({ text: 'Scope text.' });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   const oldId = page.bindings[0].id;
   page.receive(oldId, { text: 'bing 译文' });
   await settle();
@@ -584,13 +608,13 @@ test('a configure that changes provider or language starts a fresh scope', async
 
   // Same provider+language: the finished translation is still valid.
   page.engine.configure({ enabled: true, provider: 'bing', targetLanguage: 'zh', view: 'original' });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.document.querySelector('.kwg-translated').textContent).toBe('bing 译文');
   expect(page.bindings).toHaveLength(1);
 
   // New scope: old reply and old cache entry must not answer for the new scope.
   page.engine.configure({ enabled: true, provider: 'google', targetLanguage: 'en', view: 'translated' });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   expect(page.bindings).toHaveLength(2);
   page.receive(oldId, { text: '迟到的 bing 译文' });
   await settle();
@@ -599,7 +623,7 @@ test('a configure that changes provider or language starts a fresh scope', async
 
 test('reading the source while the translation hides it does not retranslate the same text', async () => {
   const page = boot({ text: 'Stable reasoning text.' });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   page.receive(page.bindings[0].id, { text: '稳定译文' });
   await settle();
   expect(page.block.classList.contains('kwg-hiding-source')).toBe(true);
@@ -632,17 +656,112 @@ test('reading the source while the translation hides it does not retranslate the
 
 test('oversized reasoning fails immediately in the renderer and preserves the original', async () => {
   const page = boot({ text: '合'.repeat(120001) });
-  await page.clock.advance(1000);
+  await page.clock.advance(2500);
   await settle();
   expect(page.bindings).toHaveLength(0);
   expect(page.document.querySelector('.kwg-status').textContent).toBe('思考文本过长');
   expect(page.block.classList.contains('kwg-hiding-source')).toBe(false);
 });
 
+// Structure telemetry: the engine must expose how many blocks actually carry
+// the expected summary/body shape, so a future Kimi DOM drift is visible to
+// the host instead of presenting an unmatched page as "working".
+test('status reports matched and seen block counts as a DOM-drift signal', async () => {
+  const page = boot();
+  await page.clock.advance(2500);
+  expect(page.engine.status()).toMatchObject({ state: 'active', version: 1, blocks: 1, seenBlocks: 1 });
+
+  makeBlock(page.document, { text: 'Second block.' });
+  page.notify([{ target: page.document.body, type: 'childList', addedNodes: [page.document.body.lastChild] }]);
+  await page.clock.advance(3200);
+  expect(page.engine.status().blocks).toBe(2);
+  expect(page.engine.status().seenBlocks).toBe(2);
+
+  // A block with the new Kimi class name but without summary/body structure:
+  // seen goes up, matched does not.
+  const drifted = page.document.createElement('div');
+  drifted.className = 'think-block';
+  page.document.body.appendChild(drifted);
+  page.notify([{ target: page.document.body, type: 'childList' }]);
+  await page.clock.advance(1500);
+  expect(page.engine.status()).toMatchObject({ blocks: 2, seenBlocks: 3 });
+});
+
+// Content-quiet window, independent of label wording: a future Kimi that
+// renames its streaming status must not turn every scan into a paid request
+// for partial text. Text present at mount is finished history and dispatches
+// at once; growing text mutates continuously and stays withheld until the
+// mutations stop, and only the final full text is ever sent.
+test('an unrecognizable streaming label dispatches the finished text, not the stream', async () => {
+  const page = boot({ label: '正在深度推理中' });
+  await page.clock.advance(2500);
+  // Static text at mount is sent immediately — the stream has not started.
+  expect(page.bindings).toHaveLength(1);
+  expect(page.bindings[0].text).toBe('First thought.\n\nSecond thought.');
+
+  // Streaming begins: partial text keeps mutating inside the quiet window.
+  page.markdown.innerText = 'First thought. Partial one.';
+  page.notify();
+  await page.clock.advance(500);
+  expect(page.bindings).toHaveLength(1);
+  page.markdown.innerText = 'First thought. Partial one. Partial two.';
+  page.notify();
+  await page.clock.advance(500);
+  // Still inside the quiet window: the mutations keep rescheduling.
+  expect(page.bindings).toHaveLength(1);
+  await page.clock.advance(2500);
+  // The window expired without further mutations: exactly the full text is sent.
+  expect(page.bindings).toHaveLength(2);
+  expect(page.bindings[1].text).toBe('First thought. Partial one. Partial two.');
+
+  // Reply the in-flight request so its concurrency slot frees up, then a new
+  // text is dispatched once more.
+  page.receive(page.bindings[1].id, { text: 'ok' });
+  page.markdown.innerText = 'Settled now.';
+  page.notify();
+  await page.clock.advance(2000);
+  expect(page.bindings).toHaveLength(3);
+  expect(page.bindings[2].text).toBe('Settled now.');
+});
+
+// The engine's own painting (mirrors, toolbar) carries the data attribute and
+// must never restart the quiet window or reschedule a dispatch: that would
+// make translation of a page at rest take forever or loop.
+test('own DOM writes neither reschedule scans nor delay dispatches', async () => {
+  const page = boot();
+  await page.clock.advance(2500);
+  expect(page.bindings).toHaveLength(1);
+  page.receive(page.bindings[0].id, { text: '稳定译文' });
+  await settle();
+  const mirror = page.document.querySelector('.kwg-translated');
+  expect(mirror).toBeTruthy();
+  // Painting the mirror and toggling view buttons emits records; none of them
+  // may push the next dispatch back.
+  page.notify([{ target: mirror, type: 'childList' }]);
+  page.notify([{ target: page.document.querySelector('.kwg-bar'), type: 'childList' }]);
+  await page.clock.advance(2000);
+  expect(page.bindings).toHaveLength(1);
+  expect(page.engine.status()).toMatchObject({ blocks: 1, seenBlocks: 1 });
+});
+
+// Missing body/summary structure must mount nothing rather than crash or
+// half-mount, and the page must not be reported as structurally ready.
+test('blocks without summary or body structure are skipped and stay unmatched', async () => {
+  const page = boot({ settings: { enabled: true, provider: 'bing', targetLanguage: 'zh', view: 'translated' } });
+  const bare = page.document.createElement('div');
+  bare.className = 'think-block';
+  page.document.body.appendChild(bare);
+  page.notify([{ target: page.document.body, type: 'childList' }]);
+  await page.clock.advance(1500);
+  expect(page.document.querySelectorAll('.kwg-bar')).toHaveLength(1);
+  expect(page.bindings).toHaveLength(1);
+  expect(page.engine.status()).toMatchObject({ blocks: 1, seenBlocks: 2 });
+});
+
 test('a large but bounded code block is protected whole; an unbounded one is refused, not translated', async () => {
   const big = 'w'.repeat(5000);
   const bounded = boot({ text: 'Run it.', codeTexts: [['pre', big], ['code', 'x']] });
-  await bounded.clock.advance(1000);
+  await bounded.clock.advance(2500);
   expect(bounded.bindings).toHaveLength(1);
   expect(bounded.bindings[0].protectedTexts).toContain(big);
   expect(bounded.bindings[0].protectedTexts).toContain('x');
@@ -650,7 +769,7 @@ test('a large but bounded code block is protected whole; an unbounded one is ref
 
   const many = Array.from({ length: 260 }, (_, index) => ['code', `token${index}`]);
   const overflow = boot({ text: 'Run all tokens.', codeTexts: many });
-  await overflow.clock.advance(1000);
+  await overflow.clock.advance(2500);
   expect(overflow.bindings).toHaveLength(0);
   const status = overflow.document.querySelector('.kwg-status');
   expect(status.textContent).toBe('代码内容过长，未翻译');

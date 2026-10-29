@@ -72,7 +72,8 @@ try {
   const stateDir = path.join(root, 'state'), kimiDir = path.join(root, 'kimi');
   const policy = new SubagentPolicy({ stateDir, kimiDir });
   policy.configure(undefined, models);
-  const runtimeManager = new SubagentRuntime({ stateDir, ...(process.env.KIMI_WORK_TEST_ARCHIVE ? { archive: process.env.KIMI_WORK_TEST_ARCHIVE } : {}) });
+  const runtimeManager = new SubagentRuntime({ stateDir, launchProbe: () => ({ state: 'supported', reason: 'direct_kernel_fixture' }),
+    ...(process.env.KIMI_WORK_TEST_ARCHIVE ? { archive: process.env.KIMI_WORK_TEST_ARCHIVE } : {}) });
   const prepared = runtimeManager.prepare();
   assert.equal(prepared.state, 'prepared');
   const kernelPath = path.join(prepared.bundleDir, 'app/daimon/dist/kimi-code-v2/kernel-bundle.mjs');

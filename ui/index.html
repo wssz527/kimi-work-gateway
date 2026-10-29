@@ -481,6 +481,8 @@
           </div>
           <div class="fact"><dt>Kimi 版本</dt><dd class="mono" id="tr-version">—</dd></div>
           <div class="fact"><dt>宿主进程</dt><dd class="mono" id="tr-pid">—</dd></div>
+          <div class="fact" id="tr-verification" hidden><dt>版本核对</dt><dd>—</dd></div>
+          <div class="fact" id="tr-warning" hidden><dt>启动提示</dt><dd>—</dd></div>
           <div class="fact">
             <dt>自定义服务 Key</dt>
             <dd><span class="dot" id="tr-env-dot" data-tone="neutral"></span><span id="tr-env">…</span></dd>
@@ -666,7 +668,7 @@
             <svg class="icon" aria-hidden="true"><use href="#i-link"/></svg>撤销 DNS 映射
           </button>
         </div>
-        <p class="hint">准备副本会复制受支持的 Kimi 运行时到本机副本目录；原生设置会写入系统映射，由系统请求管理员授权。</p>
+        <p class="hint">继承模式下的“启动 Kimi”打开原版应用，不加载副本；强制子代理模式仍需通过副本启动能力检查。原生设置由系统请求管理员授权。</p>
       </div>
     </section>
   </main>

@@ -11,7 +11,7 @@ try { findSubagentInstallation(); installed = true; } catch {}
 const node = spawnSync('node', ['--version'], { encoding: 'utf8' });
 const capable = installed && node.status === 0 && Number(node.stdout.match(/^v(\d+)/)?.[1]) >= 24;
 
-test.skipIf(!capable)('the installed Work kernel runs native subagents through the shipped runtime and gateway', () => {
+test.skipIf(!capable)('the adapted installed kernel runs native subagents via direct import and an isolated gateway', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kwg-native-subagents-'));
   try {
     const child = spawnSync('node', [fileURLToPath(new URL('./fixtures/native-subagent-runner.mjs', import.meta.url)), root],

@@ -44,7 +44,8 @@ async function fixture(overrides = {}) {
   const calls = [];
   const runtime = { inspect: () => ({ state: 'not-prepared' }),
     prepare: () => { calls.push('prepare'); return { state: 'prepared', version: '3.2.21', bundleDir: '/private/bundle' }; },
-    launch: async () => { calls.push('launch'); return { state: 'waiting-kimi-exit' }; } };
+    launch: async () => { calls.push('launch'); return { state: 'waiting-kimi-exit' }; },
+    launchOriginal: async () => { calls.push('launch'); return { state: 'waiting-kimi-exit' }; } };
   const controllerOptions = { configFile: file, config, gateway, backend, stateDir: dir, kimiDir: path.join(dir, 'kimi'), policy,
     runtime, probe: { check: async () => ({ revealed: false, intranet: { passed: false, error: 'dns_unavailable' } }) },
     setup: { run: async (request, port) => { calls.push({ request, port }); return { state: 'done' }; } },

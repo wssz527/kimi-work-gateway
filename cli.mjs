@@ -49,10 +49,10 @@ const USAGE = [
 // 6 interrupted, 7 failed, 8 unsupported-platform.
 // compat: 0 verified or unverifiable, 9 incompatible (models would be dropped).
 // subagents-*: 0 prepared or launched (including "quit Kimi first"), 3 failed or
-// conflicting, 9 a Kimi version or source the adapter does not support.
+// conflicting, 9 an unsupported kernel or launch contract.
 const SETUP_EXIT = { done: 0, 'resolver-conflict': 4, cancelled: 5, interrupted: 6, failed: 7, 'unsupported-platform': 8 };
 const COMPAT_EXIT = { verified: 0, unverified: 0, unavailable: 0, incompatible: 9 };
-const SUBAGENT_INCOMPATIBLE = new Set(['subagent_runtime_incompatible', 'subagent_runtime_already_adapted']);
+const SUBAGENT_INCOMPATIBLE = new Set(['subagent_runtime_incompatible', 'subagent_runtime_already_adapted', 'subagent_launch_unsupported']);
 
 function streams(io) {
   return {
@@ -351,8 +351,8 @@ async function subagentCommand(action, argv, env, io, overrides) {
         return report({ state: 'scope-conflict' }, inspected, 3);
       }
       const failed = current.document?.mode === 'blocked'
-        || ['conflict', 'outdated', 'unavailable', 'policy-unavailable', 'heartbeat-stale'].includes(inspected.state);
-      return report(current, inspected, failed ? 3 : 0);
+        || ['conflict', 'scope-conflict', 'outdated', 'unavailable', 'policy-unavailable', 'heartbeat-stale'].includes(inspected.state);
+      return report(current, inspected, inspected.state === 'unsupported' ? 9 : failed ? 3 : 0);
     }
     const current = ensureSubagentPolicy(policy);
     if (action === 'prepare') return report(current, runtime.prepare(), 0);
@@ -360,8 +360,9 @@ async function subagentCommand(action, argv, env, io, overrides) {
     // launch() refuses unprepared state too, but failing here keeps the reason
     // and the exit code in the CLI contract instead of the runtime's wording.
     const inspected = runtime.inspect();
+    if (inspected.state === 'unsupported') throw Error('subagent_launch_unsupported');
     if (!['loaded', 'pending-policy', 'waiting-launch'].includes(inspected.state)) throw Error('subagent_runtime_not_ready');
-    return report(current, await runtime.launch(), 0);
+    return report(current, await runtime.launch({ protectedEnvNames: ['KIMI_WORK_UPSTREAM_KEY', 'KIMI_WORK_GATEWAY_TOKEN', 'KIMI_WORK_TRANSLATION_API_KEY'] }), 0);
   } catch (failure) {
     return subagentFailure(io, action, failure);
   }

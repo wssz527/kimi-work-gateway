@@ -17,6 +17,16 @@
 // drops the body subtree on collapse and on re-render. Hiding the source hides
 // the whole reasoning subtree, so the translation occupies exactly the same
 // space with Kimi's own width, scroll area and collapse state.
+//
+// The selectors above describe the Kimi build this file was written against;
+// they are not trusted as a compatibility proof. `status()` reports how many
+// `.think-block` nodes the page actually contains (`seenBlocks`) and how many
+// exposed the expected summary/body structure (`blocks`), so the host can
+// distinguish an empty conversation from a drifted DOM instead of presenting
+// an unmatched page as a working translation. Dispatching is additionally
+// gated on a content-quiet window that never looks at label wording: a future
+// Kimi that renames its "thinking" status cannot turn streamed partial text
+// into a paid retranslation every scan.
 (() => {
   'use strict';
   const VERSION = 1;
@@ -36,6 +46,7 @@
   };
   const ATTR = `data-${NS}`;
   const SETTLE_MS = 260;
+  const QUIET_MS = 900;
   const SCAN_MS = 400;
   const REPLY_TIMEOUT_MS = 150000;
   const MAX_REPLY_CHARS = 400000;
@@ -63,10 +74,36 @@
 
   const engine = { version: VERSION, configure, stop, status };
   const doc = globalThis.document;
-  const legacy = globalThis.__kctWork || globalThis.window?.__kctWork;
+  let legacy = globalThis.__kctWork || globalThis.window?.__kctWork;
+  if (legacy?.version >= 4 && typeof legacy.dispose === 'function') {
+    try { legacy.dispose(); } catch {}
+    legacy = globalThis.__kctWork || globalThis.window?.__kctWork;
+  }
 
   function statusObject(state) {
     return { state, version: VERSION };
+  }
+
+  // Capability snapshot for the host. `blocks` counts the mounted contexts that
+  // still show the expected summary/body structure; `seenBlocks` counts every
+  // `.think-block` the page renders. A page with seenBlocks > blocks proves the
+  // selectors drifted from the running Kimi build, which must surface as a
+  // structural note instead of a silently "working" engine. DOM readiness is
+  // only claimed once the mountable structure was actually seen or the page
+  // has none of the blocks at all (an empty conversation is still ready).
+  function capability() {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    const seen = doc.querySelectorAll(BLOCK)?.length || 0;
+    const structured = [...state.live].filter(ctx => ctx.block.isConnected
+      && (ctx.block.querySelector(SUMMARY) || ctx.block.querySelector(BODY))).length;
+    return { blocks: structured, seenBlocks: seen };
+  }
+
+  function statusReport(state) {
+    const value = statusObject(state);
+    const snapshot = capability();
+    if (snapshot) { value.blocks = snapshot.blocks; value.seenBlocks = snapshot.seenBlocks; }
+    return value;
   }
 
   // A re-injection happens on every attach (renderer reload, pipe restart). The
@@ -440,7 +477,6 @@
     const bar = doc.createElement('div');
     bar.className = CLASS.bar;
     bar.setAttribute(ATTR, 'bar');
-
     const makeButton = (view, text) => {
       const button = doc.createElement('button');
       button.type = 'button';
@@ -475,7 +511,7 @@
     const ctx = {
       block, bar, statusEl, buttons: [translatedBtn, originalBtn], retryBtn,
       source: '', translation: '', rendered: false, mirror: null,
-      token: 0, timer: 0, pending: [],
+      token: 0, timer: 0, pending: [], lastMutation: NaN,
     };
     state.ctxs.set(block, ctx);
     state.live.add(ctx);
@@ -570,7 +606,23 @@
       ctx.block.classList.remove(CLASS.hiding);
       setStatus(ctx, '', '');
     }
+    // Content-quiet window, independent of the settle heuristic: text that
+    // mutated inside QUIET_MS is still streaming (or mutating under a future
+    // Kimi whose label wording the heuristic cannot read), so dispatching it
+    // would pay for a partial translation that is immediately invalidated.
+    // A freshly mounted context starts inside the window (NaN comparison is
+    // always false, so the explicit flag below), because a mount can land in
+    // the middle of a stream. The check sits after the settled gate, so
+    // already-translated or cached blocks never re-enter scheduling, and a
+    // held dispatch reschedules itself once, for the remaining window — a
+    // block at rest is sent, a streaming block keeps being pushed forward
+    // until the mutations stop.
     if (!isSettled(ctx.block)) return;
+    // A context whose content was never seen mutating is dispatched at once;
+    // the quiet window only guards text that is actively changing, which is
+    // exactly the case the settle heuristic cannot cover on a future Kimi.
+    const quietFor = Number.isFinite(ctx.lastMutation) ? QUIET_MS - (Date.now() - ctx.lastMutation) : 0;
+    if (quietFor > 0) { schedule(ctx, quietFor + 50); return; }
     const key = cacheKey(text);
     if (state.cache.has(key)) { applyTranslation(ctx, state.cache.get(key)); return; }
     if (recentFailure(key)) { setStatus(ctx, '稍后重试', 'error'); return; }
@@ -661,14 +713,37 @@
     state.scanTimer = setTimeout(() => { state.scanTimer = 0; scan(); }, delay);
   }
 
+  // A mutation inside a tracked context marks its content as freshly mutated
+  // (for the quiet window). Mutations the engine itself caused (any node with
+  // our attribute, including toolbar buttons and mirrors) are ignored, so our
+  // own painting can never reschedule or retranslate: without this, a mirror
+  // update would restart the quiet window after every reply and repeatedly
+  // delay or duplicate the next dispatch. A childList mutation on a container
+  // (the conversation list itself) is also relevant: that is how new think
+  // blocks are appended, and the target is not inside any block.
+  function trackedTarget(record) {
+    const target = record?.target;
+    if (!target || typeof target.closest !== 'function') return null;
+    if (target.closest(`[${ATTR}]`)) return null;
+    const block = target.closest(BLOCK);
+    if (block) return block;
+    if (record.type === 'childList'
+      && [...record.addedNodes || [], ...record.removedNodes || []]
+        .some(node => node && typeof node.matches === 'function' && node.matches(BLOCK))) return target;
+    return null;
+  }
+
   function onMutations(records) {
     if (!state.active) return;
+    let relevant = false;
     for (const record of records) {
-      const target = record?.target;
-      if (target && typeof target.closest === 'function' && target.closest(`[${ATTR}]`)) continue;
-      scheduleScan();
-      return;
+      const block = trackedTarget(record);
+      if (!block) continue;
+      relevant = true;
+      const ctx = state.ctxs.get(block);
+      if (ctx && record.type !== 'attributes') ctx.lastMutation = Date.now();
     }
+    if (relevant) scheduleScan();
   }
 
   function start() {
@@ -737,17 +812,17 @@
     if (rescope) { state.cache.clear(); state.cacheChars = 0; }
     state.settings = next;
     if (next.enabled) start();
-    return statusObject(state.active ? 'active' : 'inactive');
+    return statusReport(state.active ? 'active' : 'inactive');
   }
 
   function stop() {
     teardown();
     state.settings = { ...state.settings, enabled: false };
-    return statusObject('inactive');
+    return statusReport('inactive');
   }
 
   function status() {
-    return statusObject(state.active ? 'active' : 'inactive');
+    return statusReport(state.active ? 'active' : 'inactive');
   }
 
   // Exposed for the next injection only: the bounded cache survives a reload of
@@ -756,11 +831,11 @@
 
   install(engine);
 
-  if (!state.settings.enabled) return statusObject('inactive');
+  if (!state.settings.enabled) return statusReport('inactive');
   if (doc.body) start();
   else {
     state.bootHandler = () => { state.bootHandler = null; start(); };
     doc.addEventListener?.('DOMContentLoaded', state.bootHandler, { once: true });
   }
-  return statusObject(state.active ? 'active' : 'inactive');
+  return statusReport(state.active ? 'active' : 'inactive');
 })();

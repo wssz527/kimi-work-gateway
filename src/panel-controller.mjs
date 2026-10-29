@@ -56,6 +56,13 @@ export class PanelController {
     this.closed = false;
   }
 
+  get protectedEnvNames() {
+    const config = this.config;
+    return typeof config.upstream?.apiKeyEnv === 'string' && config.upstream.apiKeyEnv
+      && typeof config.tokenEnv === 'string' && config.tokenEnv
+      ? [config.upstream.apiKeyEnv, config.tokenEnv] : [];
+  }
+
   readConfiguration() {
     const document = readSubagentJSON(this.configFile);
     const config = readConfig(document);
@@ -126,9 +133,10 @@ export class PanelController {
     let translationStatus;
     try { translationStatus = this.translationError ? { state: 'failed', reason: this.translationError } : this.translation.inspect(); }
     catch { translationStatus = { state: 'failed', reason: 'translation_session_failed' }; }
-    const translationRuntime = Object.fromEntries(['state', 'version', 'reason']
+    const translationRuntime = Object.fromEntries(['state', 'version', 'reason', 'warning', 'verification']
       .filter(field => typeof translationStatus?.[field] === 'string').map(field => [field, translationStatus[field]]));
     if (Number.isInteger(translationStatus?.pid)) translationRuntime.pid = translationStatus.pid;
+    if (this.diagnostics.translationWarning?.reason) translationRuntime.warning = this.diagnostics.translationWarning.reason;
     const compatibility = this.runtimeStatus?.compatibility;
     if (compatibility && ['structural', 'existing'].includes(compatibility.strategy)
       && Number.isInteger(compatibility.adapterVersion)) runtime.compatibility = { ...compatibility };
@@ -217,6 +225,7 @@ export class PanelController {
       try {
         this.translation.configure(settings);
         this.translationError = undefined;
+        delete this.diagnostics.translationWarning;
       } catch (error) {
         this.translationError = 'translation_settings_conflict';
         throw new PanelError('translation_apply_failed', 503, { saved: true, reason: reason(error) });
@@ -233,7 +242,13 @@ export class PanelController {
     if (policy.mode === 'blocked') throw new PanelError('subagent_policy_unavailable', 409);
     this.translation.configure(current.config.translation);
     this.translationError = undefined;
-    return this.translation.launch({ subagentRuntime: this.runtime, force: policy.mode === 'force' });
+    const result = await this.translation.launch({ subagentRuntime: this.runtime, force: policy.mode === 'force',
+      protectedEnvNames: this.protectedEnvNames });
+    // A non-force launch that could not adopt the prepared subagent bundle must
+    // be visible instead of silent: surface the runtime's own warning verbatim.
+    if (result?.warning) this.diagnostics.translationWarning = { at: Date.now(), reason: result.warning };
+    else delete this.diagnostics.translationWarning;
+    return result;
   }
 
   async diagnose(action) {
@@ -289,18 +304,27 @@ export class PanelController {
           else if (input.action === 'prepare-runtime') result = this.runtime.prepare();
           else if (input.action === 'launch-translated-kimi') result = await this.launchTranslation();
           else if (input.action === 'check-translation') result = this.translation.check();
-          else if (input.action === 'launch-kimi') result = normalizeTranslationConfig(this.config.translation).enabled
-            ? await this.launchTranslation() : await this.runtime.launch();
+          else if (input.action === 'launch-kimi') {
+            if (normalizeTranslationConfig(this.config.translation).enabled) result = await this.launchTranslation();
+            else {
+              const policy = this.ownedPolicy();
+              result = policy.mode === 'inherit'
+                ? await this.runtime.launchOriginal({ protectedEnvNames: this.protectedEnvNames })
+                : await this.runtime.launch({ protectedEnvNames: this.protectedEnvNames });
+            }
+          }
           else if (input.action === 'copy-token') result = { state: await this.copyToken({ request: input,
             stateDir: this.stateDir, key: this.gateway.connection?.key }) };
           else result = await this.setup.run({ id: input.id, at: input.at,
             action: input.action === 'prepare-native' ? 'prepare' : 'remove-dns' }, this.config.dns.port);
           const safe = result?.state ? { state: result.state,
-            ...(result.version ? { version: result.version } : {}), ...(result.reason ? { reason: result.reason } : {}) }
+            ...(result.version ? { version: result.version } : {}), ...(result.reason ? { reason: result.reason } : {}),
+            ...(result.warning ? { warning: result.warning } : {}) }
             : { state: 'failed', reason: 'panel_operation_failed' };
           this.operation = { id: input.id, action: input.action, ...safe };
         } catch (error) { this.operation = { id: input.id, action: input.action, state: 'failed', reason: reason(error) }; }
-        record.result = { state: this.operation.state, ...(this.operation.reason ? { reason: this.operation.reason } : {}) };
+        record.result = { state: this.operation.state, ...(this.operation.reason ? { reason: this.operation.reason } : {}),
+          ...(this.operation.warning ? { warning: this.operation.warning } : {}) };
         try { writeSubagentJSON(this.receiptFile, { schemaVersion: 1, history }); }
         catch { this.operation = { id: input.id, action: input.action, state: 'failed', reason: 'panel_receipt_conflict' }; }
         this.runtimeAfter = 0;

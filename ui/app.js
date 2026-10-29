@@ -77,6 +77,8 @@ const RUNTIME_STATE = {
   'heartbeat-stale': { tone: 'warn', word: '心跳过期', note: '运行时曾加载策略，但心跳已过期。' },
   'policy-unavailable': { tone: 'bad', word: '策略不可用', note: '运行时无法读取策略，子代理请求会被拒绝。' },
   unavailable: { tone: 'bad', word: '不可用', note: '运行时当前不可用。' },
+  unsupported: { tone: 'bad', word: '启动接口不支持', note: '当前应用无法确认适配副本的加载能力；主模型 BYOK 与普通翻译可独立使用。' },
+  'scope-conflict': { tone: 'bad', word: '作用域不匹配', note: '实际运行时与策略所属的 Kimi 目录不一致。' },
   outdated: { tone: 'warn', word: '版本过旧', note: '运行时版本与当前内核不一致。' },
   conflict: { tone: 'bad', word: '冲突', note: '运行时与配置存在冲突，未被覆盖。' },
 };
@@ -171,6 +173,8 @@ const ERROR_HINT = {
   subagent_policy_owner_conflict: '另一实例已接管子代理策略，请停止重复运行的服务。',
   subagent_policy_apply_failed: '选择已保存，但当前策略未能应用，请查看运行时状态。',
   subagent_policy_unavailable: '无法读取当前子代理策略，请检查状态目录后重启面板。',
+  subagent_launch_unsupported: '当前 Kimi 正式应用不支持已确认的副本启动接口；主模型接入与普通翻译可独立使用。',
+  subagent_bundle_application_mismatch: '子代理副本与发现的 Kimi 安装不一致，请重新检查安装来源。',
   subagent_model_unavailable: '所选模型已不在目录中，请重新选择。',
   subagent_model_tools_required: '此模型未声明工具调用，不能作为子代理。',
   invalid_subagent_effort: '此模型未声明所选思考档位，请重新选择。',
@@ -391,6 +395,8 @@ const dom = {
   trRuntime: $('tr-runtime'),
   trVersion: $('tr-version'),
   trPid: $('tr-pid'),
+  trVerification: $('tr-verification'),
+  trWarning: $('tr-warning'),
   trEnvDot: $('tr-env-dot'),
   trEnv: $('tr-env'),
   trVerdictDot: $('tr-verdict-dot'),
@@ -2127,6 +2133,20 @@ const TRANSLATION_REASON = {
   'legacy-engine': '检测到旧版翻译注入，未重复挂载。',
   'settings-pending': '设置已保存，等待下次从网关启动时采用。',
   'launch-failed': '带翻译的 Kimi 启动失败。',
+  'translation_legacy_running': '检测到任务 3 的旧注入仍在运行，网关未重复挂载。',
+  'translation_waiting_work_view': '已连接 Kimi，正在等待打开 Work 思考页面。',
+  'translation_renderer_unconfirmed': 'Kimi 渲染页面未确认翻译引擎，可能是不兼容的界面版本。',
+  'translation_session_conflict': '翻译会话记录冲突，请检查状态目录或重启面板。',
+  'translation_host_stale': '上一次翻译会话状态已过期，请重新启动。',
+  'subagent_runtime_outdated': '子代理运行时落后于当前 Kimi 安装，本次翻译启动未携带；重新「准备运行时」后恢复。',
+  'subagent_state_conflict': '子代理运行时状态异常，本次翻译启动未携带其运行时。',
+  'subagent_runtime_not_ready': '子代理运行时尚未就绪，本次翻译启动未携带。',
+  'subagent_runtime_unsupported': '当前应用未通过子代理副本启动检查，本次仅启动翻译。',
+  'subagent_launch_unsupported': '当前应用不支持已确认的子代理副本启动接口。',
+  'subagent_policy_unavailable': '子代理策略不可用，本次翻译启动未携带其运行时。',
+  'subagent_bundle_application_mismatch': '子代理运行时指向另一个 Kimi 安装，本次翻译启动未携带。',
+  'subagent_heartbeat_stale': '子代理运行时心跳过期，本次翻译启动未携带其运行时。',
+  'subagent_policy_blocked': '子代理策略处于阻止状态，本次翻译启动未携带其运行时。',
 };
 
 function translationReason(code) {
@@ -2256,6 +2276,20 @@ function renderTranslation() {
   setText(dom.trRuntime, info.word);
   setText(dom.trVersion, typeof runtime.version === 'string' && runtime.version ? runtime.version : '—');
   setText(dom.trPid, typeof runtime.pid === 'number' ? String(runtime.pid) : '—');
+  // The version display is informational only. A build this codebase was never
+  // hand-verified against is labelled instead of refused: the renderer
+  // handshake remains the real gate.
+  if (dom.trVerification) {
+    dom.trVerification.hidden = runtime.verification !== 'unverified-version';
+    dom.trVerification.dataset.tone = runtime.verification === 'unverified-version' ? 'warn' : 'ok';
+    setText(dom.trVerification.querySelector?.('dd') || dom.trVerification, runtime.verification === 'unverified-version'
+      ? `未验证版本 ${runtime.version}；可启动，以渲染器确认为准`
+      : '');
+  }
+  if (dom.trWarning) {
+    dom.trWarning.hidden = !runtime.warning;
+    setText(dom.trWarning.querySelector?.('dd') || dom.trWarning, runtime.warning ? translationReason(runtime.warning) : '');
+  }
 
   const verdict = evaluateTranslation(data, { dirty });
   setDot(dom.trVerdictDot, verdict.tone);
