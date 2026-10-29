@@ -25,13 +25,13 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 macOS 终端：
 
 ```sh
-npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.2/kimi-work-gateway-0.6.2.tgz"
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.3/kimi-work-gateway-0.6.3.tgz"
 ```
 
 Windows PowerShell：
 
 ```powershell
-npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.2/kimi-work-gateway-0.6.2.tgz"
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.3/kimi-work-gateway-0.6.3.tgz"
 ```
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
