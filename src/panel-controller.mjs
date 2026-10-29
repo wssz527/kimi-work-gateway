@@ -20,7 +20,10 @@ const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)
 const base = config => ({ ...connectionFields(config), models: config.models, translation: normalizeTranslationConfig(config.translation) });
 const reason = error => /^[a-z][a-z0-9_-]{0,100}$/.test(error?.message) ? error.message : 'panel_operation_failed';
 const summarize = value => ({ mode: value.mode,
-  ...(value.mode === 'force' ? { model: value.model, modelAlias: value.modelAlias, ...(value.effort === undefined ? {} : { effort: value.effort }) } : {}),
+  ...(value.transport ? { transport: value.transport } : {}),
+  ...(['force', 'pool'].includes(value.mode) ? { model: value.model, modelAlias: value.modelAlias,
+    ...(value.mode === 'pool' ? { models: value.models } : {}),
+    ...(value.effort === undefined ? {} : { effort: value.effort }) } : {}),
   ...(value.mode === 'blocked' ? { reason: value.reason } : {}) });
 
 export class PanelError extends Error {
@@ -103,8 +106,8 @@ export class PanelController {
     try {
       value = actual.mode === 'blocked' && /^[a-z][a-z0-9_-]{0,100}$/.test(actual.reason)
         ? { mode: 'blocked', reason: actual.reason } : normalizeSubagentPolicy(actual, this.backend.models);
-      if (actual.schemaVersion !== 1 || !['inherit', 'force', 'blocked'].includes(actual.mode)
-        || value.mode === 'force' && actual.modelAlias !== value.modelAlias
+      if (actual.schemaVersion !== 1 || !['inherit', 'force', 'pool', 'blocked'].includes(actual.mode)
+        || ['force', 'pool'].includes(value.mode) && actual.modelAlias !== value.modelAlias
         || digest({ ...summarize(actual), homeDir: this.policy.homeDir }) !== actual.revision) throw Error();
     } catch { throw new PanelError('subagent_policy_unavailable', 409); }
     return value;
@@ -121,8 +124,16 @@ export class PanelController {
     }
     let policy;
     try { policy = this.ownedPolicy(); } catch (error) { policy = { mode: 'blocked', reason: error.message }; }
-    const runtime = Object.fromEntries(['state', 'version', 'mode', 'modelAlias', 'reason']
+    const native = this.policy.nativeSubagents;
+    if (native && (policy.transport === 'native-config' || configured.transport === 'native-config' || native.policy?.transport === 'native-config')) {
+      if (this.policy.nativeSync) { this.policy.nativeSync(); this.runtimeStatus = native.inspect(); }
+      else if (policy.mode !== 'blocked') this.runtimeStatus = native.update({ ...policy, transport: 'native-config' });
+      else this.runtimeStatus = native.inspect?.() || { state: 'conflict', reason: policy.reason };
+    }
+    const runtime = Object.fromEntries(['state', 'version', 'mode', 'modelAlias', 'reason', 'transport']
       .filter(field => typeof this.runtimeStatus[field] === 'string').map(field => [field, this.runtimeStatus[field]]));
+    if (this.runtimeStatus.observed?.state === 'observed-schema') runtime.observed = { ...this.runtimeStatus.observed };
+    if (this.runtimeStatus.compatibility?.state === 'source-compatible') runtime.compatibility = { ...this.runtimeStatus.compatibility };
     const lastSpawn = this.runtimeStatus.lastSpawn;
     if (typeof lastSpawn?.modelAlias === 'string' && Number.isFinite(lastSpawn.at)) {
       runtime.lastSpawn = { modelAlias: lastSpawn.modelAlias, at: lastSpawn.at };
@@ -158,10 +169,12 @@ export class PanelController {
 
   async apply(input) {
     await this.serialize(async () => {
-      if (!input || !['inherit', 'force'].includes(input.mode)) throw new PanelError('invalid_subagent_policy');
+      if (!input || !['inherit', 'force', 'pool'].includes(input.mode)) throw new PanelError('invalid_subagent_policy');
       const current = this.currentConfiguration(input);
-      const desired = { mode: input.mode, ...(input.mode === 'force' ? { model: input.model,
-        ...(input.effort == null ? {} : { effort: input.effort }) } : {}) };
+      const desired = { mode: input.mode, ...(input.transport ? { transport: input.transport } : {}),
+        ...(['force', 'pool'].includes(input.mode) ? { model: input.model,
+          ...(input.mode === 'pool' ? { models: input.models } : {}),
+          ...(input.effort == null ? {} : { effort: input.effort }) } : {}) };
       const normalized = normalizeSubagentPolicy(desired, this.backend.models);
       this.persist(current, { ...current.document, subagents: desired });
       this.config = { ...this.config, subagents: normalized };
@@ -242,7 +255,8 @@ export class PanelController {
     if (policy.mode === 'blocked') throw new PanelError('subagent_policy_unavailable', 409);
     this.translation.configure(current.config.translation);
     this.translationError = undefined;
-    const result = await this.translation.launch({ subagentRuntime: this.runtime, force: policy.mode === 'force',
+    const result = await this.translation.launch({ subagentRuntime: policy.transport === 'native-config' ? undefined : this.runtime,
+      force: policy.mode === 'force' && policy.transport !== 'native-config',
       protectedEnvNames: this.protectedEnvNames });
     // A non-force launch that could not adopt the prepared subagent bundle must
     // be visible instead of silent: surface the runtime's own warning verbatim.
@@ -308,7 +322,7 @@ export class PanelController {
             if (normalizeTranslationConfig(this.config.translation).enabled) result = await this.launchTranslation();
             else {
               const policy = this.ownedPolicy();
-              result = policy.mode === 'inherit'
+              result = policy.mode === 'inherit' || policy.transport === 'native-config'
                 ? await this.runtime.launchOriginal({ protectedEnvNames: this.protectedEnvNames })
                 : await this.runtime.launch({ protectedEnvNames: this.protectedEnvNames });
             }

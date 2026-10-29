@@ -98,6 +98,20 @@ test('launch refreshes the local copy after a compatible Kimi update without a g
   expect(fs.readFileSync(f.runtime.manifestFile, 'utf8')).toBe(good);
 });
 
+test('a bundle link that cannot be inspected is refused as a copy conflict, not a raw OS error', () => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) return;
+  const f = fixture();
+  const outside = path.join(f.root, 'outside-secret');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'payload'), 'keep');
+  const link = path.join(f.installation.bundleDir, 'app/daimon/dist/restricted-link');
+  fs.symlinkSync(path.join(outside, 'payload'), link);
+  fs.chmodSync(outside, 0o000);
+  try {
+    expect(() => f.runtime.prepare()).toThrow('subagent_bundle_link_conflict');
+  } finally { fs.chmodSync(outside, 0o700); }
+});
+
 test('version-only changes can refresh while modified prepared copies remain conflicts', () => {
   const f = fixture();
   const first = f.runtime.launchContext();

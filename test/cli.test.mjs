@@ -978,3 +978,24 @@ test('a policy write failure is reported, releases the port and leaves the file 
     expect(statSync(policyPath).isDirectory()).toBe(true);
   } finally { await closeUpstream(server); clean(dir, kimiDir); }
 }, 20000);
+
+test('status tolerates malformed pool summaries and rejects incomplete policy files without writing', async () => {
+  const dir = tempDir(), kimiDir = tempDir();
+  try {
+    const policy = new SubagentPolicy({ stateDir: dir, kimiDir });
+    policy.configure({ mode: 'force', model: FORCE_MODEL }, MODELS);
+    const malformed = { ...readSubagentJSON(policy.file), mode: 'pool', transport: 'native-config' };
+    writeFileSync(policy.file, JSON.stringify(malformed));
+    writeFileSync(path.join(dir, 'status.json'), JSON.stringify({ pid: 1, url: 'local', models: 1, subagents: { mode: 'pool' } }));
+    const before = readFileSync(policy.file, 'utf8'), io = capture();
+    expect(await run(['status', '--state-dir', dir, '--kimi-dir', kimiDir], {}, io, fakeRuntime())).toBe(0);
+    expect(io.lines.out).toContain('subagents: unreadable or foreign policy file');
+    const subagents = capture();
+    expect(await run(['subagents-status', '--state-dir', dir, '--kimi-dir', kimiDir], {}, subagents, fakeRuntime())).toBe(3);
+    expect(readFileSync(policy.file, 'utf8')).toBe(before);
+    policy.configure({ mode: 'force', model: FORCE_MODEL, transport: 'native-config' }, MODELS);
+    const native = capture();
+    expect(await run(['status', '--state-dir', dir, '--kimi-dir', kimiDir], {}, native, fakeRuntime())).toBe(0);
+    expect(native.lines.out).toContain('subagent runtime: waiting-config (native-config)');
+  } finally { clean(dir, kimiDir); }
+});

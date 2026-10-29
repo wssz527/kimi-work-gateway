@@ -8,7 +8,7 @@ function element() {
     events: new Map(), children: [], classList: { add() {}, remove() {}, toggle() {} },
     addEventListener(name, handler) { this.events.set(name, handler); },
     setAttribute(name, value) { this.attrs[name] = String(value); },
-    append(...children) { this.children.push(...children); },
+    append(...appended) { this.children.push(...appended.map((child) => (child && typeof child === 'object' ? { ...child, dataset: { ...child.dataset } } : child))); },
     appendChild(child) { this.children.push(child); }, replaceChildren(...children) { this.children = children; },
     removeChild(child) { this.children = this.children.filter((entry) => entry !== child); },
     querySelectorAll: () => [], querySelector: () => null, closest: () => null, focus() {} };
@@ -108,7 +108,9 @@ globalThis.panelUI = { state, modelIdFromAlias, evaluateBinding, isInFlight, con
   hasVision, setView, renderAll, renderOverview, renderModels, renderSubagents, renderConnection,
   renderOperation, loadState, readEditorFields, renderEditor, validateEditor,
   buildTranslation, savedTranslation, evaluateTranslation, translationLaunchState, translationKey,
-  translationFormValues, fillTranslationForm, renderTranslation, saveTranslation, translationAvailable };`, context);
+  translationFormValues, fillTranslationForm, renderTranslation, saveTranslation, translationAvailable,
+  draftFromSaved, sameTarget, setMode, pickModel, pickEffort, pickPoolDefault, appendPoolModel,
+  removePoolModel, toggleTransport, discardDraft, poolRow, saveSubagentTarget };`, context);
   return { ...context.panelUI, window, events, nodes, requests };
 }
 
@@ -280,28 +282,59 @@ test('an undeclared effort is reported as a problem instead of being offered as 
   const data = baseState();
   panel.state.data = data;
 
-  const declared = panel.evaluateSubagentDraft({ mode: 'force', model: MODEL, effort: 'high' }, data);
+  const declared = panel.evaluateSubagentDraft({ mode: 'force', transport: null, model: MODEL, effort: 'high', models: [] }, data);
   expect(declared.problems).toEqual([]);
 
-  const undeclared = panel.evaluateSubagentDraft({ mode: 'force', model: MODEL, effort: 'xhigh' }, data);
+  const undeclared = panel.evaluateSubagentDraft({ mode: 'force', transport: null, model: MODEL, effort: 'xhigh', models: [] }, data);
   expect(undeclared.problems.join(' ')).toContain('未声明档位 xhigh');
   expect(undeclared.problems.join(' ')).toContain('模型管理');
 
-  const noTools = panel.evaluateSubagentDraft({ mode: 'force', model: 'group/text-only', effort: null }, {
+  const noTools = panel.evaluateSubagentDraft({ mode: 'force', transport: null, model: 'group/text-only', effort: null, models: [] }, {
     ...data,
     models: [...data.models, { id: 'group/text-only', protocol: 'responses', contextWindow: 8192, tools: false }],
   });
   expect(noTools.problems.join(' ')).toContain('工具调用');
 
-  const inherit = panel.evaluateSubagentDraft({ mode: 'inherit', model: null, effort: null }, data);
+  const inherit = panel.evaluateSubagentDraft({ mode: 'inherit', transport: null, model: null, effort: null, models: [] }, data);
   expect(inherit.problems).toEqual([]);
+});
+
+test('a pool draft validates size, membership, default and purpose without inheriting any effort', () => {
+  const panel = ui();
+  const data = baseState();
+  panel.state.data = data;
+
+  const good = panel.evaluateSubagentDraft({
+    mode: 'pool', transport: 'native-config', model: MODEL, effort: null,
+    models: [{ id: MODEL, description: '默认兜底' }, { id: 'other/deepseek-v4-1-flash', description: '轻量任务' }],
+  }, data);
+  expect(good.problems).toEqual([]);
+
+  const empty = panel.evaluateSubagentDraft({ mode: 'pool', transport: 'native-config', model: MODEL, effort: null, models: [] }, data);
+  expect(empty.problems.join(' ')).toContain('候选列表为空');
+  expect(empty.problems.join(' ')).toContain('默认模型必须在候选列表中');
+
+  const noPurpose = panel.evaluateSubagentDraft({
+    mode: 'pool', transport: 'native-config', model: MODEL, effort: null,
+    models: [{ id: MODEL, description: '   ' }],
+  }, data);
+  expect(noPurpose.problems.join(' ')).toContain('用途说明');
+
+  const tooMany = panel.evaluateSubagentDraft({
+    mode: 'pool', transport: 'native-config', model: MODEL, effort: null,
+    models: Array.from({ length: 33 }, (_, index) => ({ id: 'm' + index, description: 'x' })),
+  }, data);
+  expect(tooMany.problems.join(' ')).toContain('最多 32 个');
+
+  const off = panel.poolRow('group/glm-5', ' line1\n line2\t ');
+  expect(off).toEqual({ id: 'group/glm-5', description: 'line1 line2' });
 });
 
 test('a polling refresh keeps an unsaved subagent draft and an unsaved connection draft', () => {
   const panel = ui();
   panel.state.data = baseState();
 
-  panel.state.draft = { mode: 'force', model: MODEL, effort: 'high' };
+  panel.state.draft = { mode: 'force', transport: null, model: MODEL, effort: 'high', models: [] };
   panel.state.draftDirty = true;
   panel.nodes.get('c-base').value = 'https://edited.example.com/v1';
   panel.state.conn.dirty = true;
@@ -315,7 +348,7 @@ test('a polling refresh keeps an unsaved subagent draft and an unsaved connectio
 
   panel.adoptState(refreshed);
 
-  expect(panel.state.draft).toEqual({ mode: 'force', model: MODEL, effort: 'high' });
+  expect(panel.state.draft).toEqual({ mode: 'force', transport: null, model: MODEL, effort: 'high', models: [] });
   expect(panel.state.draftDirty).toBe(true);
   expect(panel.nodes.get('c-base').value).toBe('https://edited.example.com/v1');
   expect(panel.state.data.revision).toBe('b'.repeat(64));
@@ -446,7 +479,7 @@ test('every view renders against a full, empty and disconnected state without th
 test('typing into the inspector survives every re-render and reaches the catalogue unchanged', () => {
   const panel = ui();
   panel.state.data = baseState();
-  panel.state.draft = { mode: 'force', model: MODEL, effort: 'low' };
+  panel.state.draft = { mode: 'force', transport: null, model: MODEL, effort: 'low', models: [] };
   panel.state.draftDirty = false;
   panel.openEditor(panel.state.data.models[0]);
 
@@ -791,4 +824,303 @@ test('translation action receipts report the runtime result rather than the acce
   await panel.confirmActionResult('check-translation', 'op-5');
   expect(messageOf(panel)).toContain('渲染入口，或页面结构与翻译引擎不匹配');
   expect(messageOf(panel)).not.toContain('。。');
+});
+
+const POOL_MODEL = 'group/glm-5';
+
+function poolBaseState(overrides = {}) {
+  const data = baseState(overrides);
+  data.models = [
+    ...data.models,
+    { id: POOL_MODEL, name: 'GLM-5', protocol: 'responses', contextWindow: 200000, tools: true,
+      reasoning: true, inputModalities: ['text'], reasoningEfforts: ['low', 'high'], defaultEffort: 'low' },
+  ];
+  return data;
+}
+
+test('an upgraded legacy force target keeps the copy channel until the user saves with the toggle on', () => {
+  const panel = ui();
+  const data = baseState();
+  data.subagents.configured = { mode: 'force', model: MODEL, modelAlias: ALIAS, effort: 'low' };
+  data.subagents.policy = { mode: 'force', model: MODEL, modelAlias: ALIAS, effort: 'low' };
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+  panel.setView('subagents');
+
+  expect(panel.state.draft).toEqual({ mode: 'force', transport: null, model: MODEL, effort: 'low', models: [] });
+  expect(panel.nodes.get('sa-native').checked).toBe(false);
+  expect(panel.nodes.get('sa-native-row').hidden).toBe(false);
+  expect(panel.nodes.get('sa-pool-fields').hidden).toBe(true);
+  expect(panel.nodes.get('sa-force-fields').hidden).toBe(false);
+  expect(panel.sameTarget(panel.state.draft, panel.savedTarget(data))).toBe(true);
+});
+
+test('saving a native-config force target posts the transport only after the user enabled it', async () => {
+  const next = baseState({ revision: 'c'.repeat(64) });
+  next.subagents.configured = { mode: 'force', transport: 'native-config', model: MODEL, modelAlias: ALIAS, effort: 'low' };
+  next.subagents.policy = { mode: 'force', transport: 'native-config', model: MODEL, modelAlias: ALIAS, effort: 'low' };
+  next.subagents.runtime = { state: 'file-applied', transport: 'native-config', mode: 'force', modelAlias: ALIAS, version: '3.2.21' };
+  const panel = ui({ hash: '#key=unit-panel-session',
+    routes: { '/api/subagents': { status: 200, body: { ok: true, state: next } } } });
+  panel.state.data = baseState();
+  panel.adoptState(panel.state.data, { initial: true });
+  panel.setView('subagents');
+
+  panel.nodes.get('mode-force').checked = true;
+  panel.setMode('force');
+  panel.pickModel(MODEL);
+  panel.toggleTransport(true);
+  expect(panel.state.draftDirty).toBe(true);
+  expect(panel.nodes.get('sa-native').checked).toBe(true);
+
+  await panel.saveSubagentTarget();
+
+  const posted = panel.requests.filter((entry) => entry.path === '/api/subagents');
+  expect(posted.length).toBe(1);
+  expect(posted[0].body).toEqual({ revision: 'a'.repeat(64), mode: 'force', model: MODEL, effort: 'low', transport: 'native-config' });
+  expect(panel.state.draft).toEqual({ mode: 'force', transport: 'native-config', model: MODEL, effort: 'low', models: [] });
+  expect(messageOf(panel)).toContain('配置写入与内核采用情况见运行时状态');
+
+  panel.renderSubagents();
+  expect(panel.nodes.get('rt-state').textContent).toBe('配置已写入');
+  expect(panel.nodes.get('rt-native-facts').hidden).toBe(false);
+  expect(panel.nodes.get('rt-compat').textContent).toBe('未验证');
+  expect(panel.evaluateBinding(next).word).toBe('已写入待内核采用');
+});
+
+test('pool mode collects candidates with purposes and posts them without an effort field', async () => {
+  const next = poolBaseState({ revision: 'c'.repeat(64) });
+  next.subagents.configured = { mode: 'pool', transport: 'native-config', model: MODEL, modelAlias: ALIAS,
+    models: [{ id: MODEL, modelAlias: ALIAS, description: '默认兜底' }, { id: POOL_MODEL, modelAlias: 'byok-kth-resp/' + POOL_MODEL, description: '代码审查' }] };
+  next.subagents.policy = next.subagents.configured;
+  next.subagents.runtime = { state: 'file-applied', transport: 'native-config', mode: 'pool', version: '3.2.21' };
+  const panel = ui({ hash: '#key=unit-panel-session',
+    routes: { '/api/subagents': { status: 200, body: { ok: true, state: next } } } });
+  panel.state.data = poolBaseState();
+  panel.adoptState(panel.state.data, { initial: true });
+
+  panel.setMode('pool');
+  expect(panel.state.draft.mode).toBe('pool');
+  expect(panel.state.draft.transport).toBe('native-config');
+  expect(panel.nodes.get('sa-native').checked).toBe(true);
+  expect(panel.nodes.get('sa-native').disabled).toBe(true);
+  expect(panel.nodes.get('sa-pool-fields').hidden).toBe(false);
+  expect(panel.nodes.get('sa-force-fields').hidden).toBe(true);
+
+  panel.appendPoolModel(MODEL, '默认兜底');
+  panel.appendPoolModel(POOL_MODEL, '负责\n代码审查与重构');
+  expect(panel.state.draft.models).toEqual([
+    { id: MODEL, description: '默认兜底' },
+    { id: POOL_MODEL, description: '负责 代码审查与重构' },
+  ]);
+  expect(panel.state.draft.model).toBeNull();
+
+  panel.pickPoolDefault(MODEL);
+  expect(panel.state.draft.model).toBe(MODEL);
+
+  panel.removePoolModel(POOL_MODEL);
+  expect(panel.state.draft.models).toEqual([{ id: MODEL, description: '默认兜底' }]);
+  expect(panel.nodes.get('sa-pool-list').children.length).toBe(1);
+  expect(panel.evaluateSubagentDraft(panel.state.draft, panel.state.data).problems).toEqual([]);
+
+  panel.appendPoolModel(POOL_MODEL, '负责代码审查与重构');
+  panel.pickPoolDefault(POOL_MODEL);
+  expect(panel.state.draft.model).toBe(POOL_MODEL);
+  panel.pickPoolDefault(MODEL);
+  expect(panel.state.draft.model).toBe(MODEL);
+
+  await panel.saveSubagentTarget();
+
+  const posted = panel.requests.filter((entry) => entry.path === '/api/subagents');
+  expect(posted.length).toBe(1);
+  expect(posted[0].body).toEqual({ revision: 'a'.repeat(64), mode: 'pool', transport: 'native-config',
+    model: MODEL, models: [{ id: MODEL, description: '默认兜底' }, { id: POOL_MODEL, description: '负责代码审查与重构' }] });
+  expect(posted[0].body.effort).toBeUndefined();
+  expect(panel.state.draft).toEqual({ mode: 'pool', transport: 'native-config', model: MODEL, effort: null,
+    models: [{ id: MODEL, description: '默认兜底' }, { id: POOL_MODEL, description: '代码审查' }] });
+
+  panel.renderSubagents();
+  expect(panel.nodes.get('rt-observed').textContent).toBe('尚未观察到');
+  const saved = panel.savedTarget(next);
+  expect(saved.mode).toBe('pool');
+  expect(saved.models).toEqual([{ id: MODEL, description: '默认兜底' }, { id: POOL_MODEL, description: '代码审查' }]);
+});
+
+test('the pool candidate select enables the append button through its change event and survives polling', () => {
+  const panel = ui();
+  const data = poolBaseState();
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+  panel.setMode('pool');
+
+  const add = panel.nodes.get('sa-pool-add');
+  const append = panel.nodes.get('sa-pool-append');
+  expect(append.disabled).toBe(true);
+  add.value = MODEL;
+  add.events.get('change')();
+  expect(append.disabled).toBe(false);
+
+  panel.renderSubagents();
+  expect(add.value).toBe(MODEL);
+  expect(append.disabled).toBe(false);
+
+  panel.appendPoolModel(MODEL, '默认兜底');
+  panel.pickPoolDefault(MODEL);
+  panel.renderSubagents();
+  expect(add.value).toBe('');
+  expect(append.disabled).toBe(true);
+});
+
+test('a pool candidate that left the catalog or lost tool support cannot be saved silently', () => {
+  const panel = ui();
+  const data = poolBaseState();
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+  panel.setMode('pool');
+  panel.appendPoolModel(MODEL, '默认兜底');
+  panel.appendPoolModel(POOL_MODEL, '代码审查');
+  panel.pickPoolDefault(MODEL);
+
+  const removed = poolBaseState();
+  removed.models = removed.models.filter((row) => row.id !== POOL_MODEL);
+  expect(panel.evaluateSubagentDraft(panel.state.draft, removed).problems.join(' ')).toContain('已不在目录中');
+
+  const incapable = poolBaseState();
+  incapable.models = incapable.models.map((row) => (row.id === POOL_MODEL ? { ...row, tools: false } : row));
+  expect(panel.evaluateSubagentDraft(panel.state.draft, incapable).problems.join(' ')).toContain('未声明工具调用');
+});
+
+test('native states that never wrote the file are not described as written', () => {
+  const panel = ui();
+  for (const [runtimeState, word, forbidden] of [['unverified', '未验证', '已写入本机配置文件'],
+    ['waiting-config', '配置待写入', '已写入本机配置文件']]) {
+    const data = baseState();
+    data.subagents.configured = { mode: 'force', transport: 'native-config', model: MODEL, modelAlias: ALIAS, effort: 'low' };
+    data.subagents.policy = data.subagents.configured;
+    data.subagents.runtime = { state: runtimeState, transport: 'native-config', mode: 'force' };
+    panel.state.data = data;
+    const verdict = panel.evaluateBinding(data);
+    expect(verdict.word).toBe(word);
+    expect(verdict.note).not.toContain(forbidden);
+  }
+});
+
+test('a native target shows the saved model instead of claiming none is fixed', () => {
+  const panel = ui();
+  const data = poolBaseState();
+  data.subagents.configured = { mode: 'force', transport: 'native-config', model: MODEL, modelAlias: ALIAS };
+  data.subagents.policy = data.subagents.configured;
+  data.subagents.runtime = { state: 'file-applied', transport: 'native-config', mode: 'force', version: '3.2.21' };
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+  panel.renderOverview(data);
+  panel.setView('subagents');
+  expect(panel.nodes.get('adopted-value').textContent).not.toBe('未固定模型');
+  expect(panel.nodes.get('adopted-value').textContent).toContain('DeepSeek');
+  expect(panel.nodes.get('adopted-sub').textContent).toContain('内核未回报具体模型');
+});
+
+test('removing the pool default or the last candidate surfaces the problem instead of saving', () => {
+  const panel = ui();
+  const data = poolBaseState();
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+  panel.setMode('pool');
+  panel.appendPoolModel(MODEL, '默认兜底');
+  panel.pickPoolDefault(MODEL);
+  panel.appendPoolModel(POOL_MODEL, '代码审查');
+
+  panel.removePoolModel(POOL_MODEL);
+  expect(panel.state.draft.models.length).toBe(1);
+  expect(panel.state.draft.model).toBe(MODEL);
+  expect(panel.evaluateSubagentDraft(panel.state.draft, data).problems).toEqual([]);
+
+  panel.removePoolModel(MODEL);
+  expect(panel.state.draft.models).toEqual([]);
+  expect(panel.state.draft.model).toBeNull();
+  const problems = panel.evaluateSubagentDraft(panel.state.draft, data).problems.join(' ');
+  expect(problems).toContain('候选列表为空');
+  expect(panel.nodes.get('sa-save').disabled).toBe(true);
+});
+
+test('an observed pool schema is reported as visible tooling, not as an adopted kernel decision', () => {
+  const panel = ui();
+  const data = poolBaseState();
+  data.subagents.configured = { mode: 'pool', transport: 'native-config', model: MODEL, modelAlias: ALIAS,
+    models: [{ id: MODEL, modelAlias: ALIAS, description: '默认兜底' }] };
+  data.subagents.policy = data.subagents.configured;
+  data.subagents.runtime = { state: 'file-applied', transport: 'native-config', mode: 'pool', version: '3.2.21',
+    compatibility: { state: 'source-compatible', version: '3.2.21', checks: {} },
+    observed: { state: 'observed-schema', at: 1750000000000 } };
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+
+  const verdict = panel.evaluateBinding(data);
+  expect(verdict.word).toBe('池已可见');
+  expect(verdict.note).toContain('只证明工具定义已更新');
+  expect(verdict.note).not.toContain('已采用');
+
+  panel.setView('subagents');
+  expect(panel.nodes.get('rt-observed').textContent).toContain('已出现在工具定义');
+  expect(panel.nodes.get('rt-compat').textContent).toBe('契约一致');
+  expect(panel.nodes.get('rt-compat-sub').textContent).toContain('3.2.21');
+});
+
+test('native targets keep legacy runtime states readable and never claim a copy-mode adoption', () => {
+  const panel = ui();
+  const data = baseState();
+  data.subagents.configured = { mode: 'force', transport: 'native-config', model: MODEL, modelAlias: ALIAS, effort: 'low' };
+  data.subagents.policy = data.subagents.configured;
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+
+  const copyStillActive = baseState();
+  copyStillActive.subagents.configured = data.subagents.configured;
+  copyStillActive.subagents.policy = data.subagents.configured;
+  copyStillActive.subagents.runtime = { state: 'loaded', mode: 'force', modelAlias: ALIAS, version: '3.2.21' };
+  const active = panel.evaluateBinding(copyStillActive);
+  expect(active.word).toBe('通道未切换');
+  expect(active.note).toContain('副本通道');
+
+  const waiting = baseState();
+  waiting.subagents.configured = data.subagents.configured;
+  waiting.subagents.policy = data.subagents.configured;
+  waiting.subagents.runtime = { state: 'waiting-config', transport: 'native-config', mode: 'force' };
+  const pending = panel.evaluateBinding(waiting);
+  expect(pending.tone).toBe('warn');
+
+  const inherit = baseState();
+  inherit.subagents.configured = data.subagents.configured;
+  inherit.subagents.policy = data.subagents.configured;
+  inherit.subagents.runtime = { state: 'inherit', transport: 'native-config' };
+  expect(panel.evaluateBinding(inherit).word).toBe('尚未接管');
+
+  const restored = baseState();
+  restored.subagents.configured = { mode: 'inherit' };
+  restored.subagents.policy = { mode: 'inherit' };
+  restored.subagents.runtime = { state: 'restored', transport: 'native-config' };
+  const info = panel.evaluateBinding(restored);
+  expect(info.word).toBe('已恢复原状');
+
+  const blocked = baseState();
+  blocked.subagents.configured = { mode: 'inherit' };
+  blocked.subagents.policy = { mode: 'inherit' };
+  blocked.subagents.runtime = { state: 'blocked', transport: 'native-config', reason: 'subagent_model_unavailable' };
+  const stopped = panel.evaluateBinding(blocked);
+  expect(stopped.tone).toBe('bad');
+});
+
+test('inherit drafts never carry a transport and revoking the panel target stays one save away', () => {
+  const panel = ui();
+  const data = baseState();
+  data.subagents.configured = { mode: 'pool', transport: 'native-config', model: MODEL, modelAlias: ALIAS,
+    models: [{ id: MODEL, modelAlias: ALIAS, description: '默认兜底' }] };
+  panel.state.data = data;
+  panel.adoptState(data, { initial: true });
+
+  panel.setMode('inherit');
+  expect(panel.state.draft).toEqual({ mode: 'inherit', transport: null, model: null, effort: null, models: [] });
+  expect(panel.state.draftDirty).toBe(true);
+  expect(panel.nodes.get('sa-native-row').hidden).toBe(true);
+  expect(panel.savedTarget(data).transport).toBe('native-config');
 });

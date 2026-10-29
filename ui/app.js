@@ -81,6 +81,12 @@ const RUNTIME_STATE = {
   'scope-conflict': { tone: 'bad', word: '作用域不匹配', note: '实际运行时与策略所属的 Kimi 目录不一致。' },
   outdated: { tone: 'warn', word: '版本过旧', note: '运行时版本与当前内核不一致。' },
   conflict: { tone: 'bad', word: '冲突', note: '运行时与配置存在冲突，未被覆盖。' },
+  'file-applied': { tone: 'ok', word: '配置已写入', note: 'secondaryModel 配置文件已更新，等待 Kimi 内核热加载；是否采用以内核为准。' },
+  'waiting-config': { tone: 'warn', word: '配置待写入', note: 'native-config 通道尚未把当前策略写入本机配置文件。' },
+  restored: { tone: 'neutral', word: '已恢复原状', note: '本面板管理的配置已撤销，Kimi 恢复自身配置。' },
+  inherit: { tone: 'neutral', word: '未接管', note: 'native-config 通道未接管子代理模型，Kimi 使用自己的配置。' },
+  blocked: { tone: 'bad', word: '已阻止', note: '子代理策略处于阻止状态，子代理请求会被拒绝。' },
+  unverified: { tone: 'warn', word: '未验证', note: '无法确认当前内核支持模型池配置；尚未写入任何配置。' },
 };
 
 const DIAG_REASON = {
@@ -179,6 +185,16 @@ const ERROR_HINT = {
   subagent_model_tools_required: '此模型未声明工具调用，不能作为子代理。',
   invalid_subagent_effort: '此模型未声明所选思考档位，请重新选择。',
   invalid_subagent_policy: '提交的目标格式不被接受，请重新选择。',
+  invalid_subagent_transport: '子代理通道只能是本机配置文件（native-config）。',
+  invalid_subagent_pool: '模型池需要 1–32 个不重复的候选模型。',
+  invalid_subagent_description: '用途说明必须是单行文本，最长 1000 字符。',
+  subagent_pool_default_required: '默认模型必须在候选列表中。',
+  subagent_native_config_pending: 'native-config 通道尚未把策略写入本机配置文件。',
+  subagent_native_config_failed: '写入本机配置文件失败，请检查文件权限。',
+  subagent_native_contract_unverified: '当前 Kimi 内核未通过模型池配置契约检查，未写入任何配置。',
+  subagent_native_contract_unavailable: '无法读取本机 Kimi 内核文件，无法确认模型池契约。',
+  subagent_native_bundle_unavailable: '没有可检查的本机 Kimi 内核文件。',
+  subagent_native_reload_pending: 'Kimi 尚未把模型池重新加载进工具定义，稍后自动重试。',
   invalid_models: '模型声明无效：请检查 ID、上下文窗口、能力与思考档位。',
   protocol_conflict: '模型 ID 末段以 kimi- 开头时必须使用 Chat，其他必须使用 Responses。',
   invalid_base_url: '上游地址需使用 HTTPS（本机回环可用 HTTP），且不能包含账号、查询参数或片段。',
@@ -313,6 +329,20 @@ const dom = {
   saModes: $('sa-modes'),
   modeInherit: $('mode-inherit'),
   modeForce: $('mode-force'),
+  modePool: $('mode-pool'),
+  saForceFields: $('sa-force-fields'),
+  saPoolFields: $('sa-pool-fields'),
+  saPoolDefault: $('sa-pool-default'),
+  saPoolDefaultHint: $('sa-pool-default-hint'),
+  saPoolAdd: $('sa-pool-add'),
+  saPoolDesc: $('sa-pool-desc'),
+  saPoolDescHint: $('sa-pool-desc-hint'),
+  saPoolAppend: $('sa-pool-append'),
+  saPoolErrors: $('sa-pool-errors'),
+  saPoolList: $('sa-pool-list'),
+  saNativeRow: $('sa-native-row'),
+  saNative: $('sa-native'),
+  saNativeHint: $('sa-native-hint'),
   saModel: $('sa-model'),
   saModelHint: $('sa-model-hint'),
   saEffort: $('sa-effort'),
@@ -326,6 +356,11 @@ const dom = {
   rtVersion: $('rt-version'),
   rtMode: $('rt-mode'),
   rtSpawn: $('rt-spawn'),
+  rtNativeFacts: $('rt-native-facts'),
+  rtObservedFact: $('rt-observed-fact'),
+  rtObserved: $('rt-observed'),
+  rtCompat: $('rt-compat'),
+  rtCompatSub: $('rt-compat-sub'),
   saVerdict: $('sa-verdict'),
   saVerdictDot: $('sa-verdict-dot'),
   saVerdictWord: $('sa-verdict-word'),
@@ -1015,11 +1050,13 @@ function translationDirty() {
 
 function savedTarget(data) {
   const configured = data && data.subagents && data.subagents.configured;
-  const mode = configured && configured.mode === 'force' ? 'force' : 'inherit';
+  const mode = configured && ['force', 'pool'].includes(configured.mode) ? configured.mode : 'inherit';
+  const transport = mode !== 'inherit' && configured && configured.transport === 'native-config' ? 'native-config' : null;
   return {
     mode,
+    transport,
     model:
-      mode === 'force'
+      mode !== 'inherit'
         ? typeof configured.model === 'string' && configured.model
           ? configured.model
           : typeof configured.modelAlias === 'string' && configured.modelAlias
@@ -1027,19 +1064,38 @@ function savedTarget(data) {
             : null
         : null,
     effort: mode === 'force' && typeof configured.effort === 'string' ? configured.effort : null,
+    models: mode === 'pool' && Array.isArray(configured.models)
+      ? configured.models
+        .filter((row) => row && typeof row.id === 'string' && typeof row.description === 'string')
+        .map((row) => ({ id: row.id, description: row.description }))
+      : [],
   };
 }
 
 function draftFromSaved(data) {
   const saved = savedTarget(data);
-  return { mode: saved.mode, model: saved.model, effort: saved.effort };
+  return {
+    mode: saved.mode,
+    transport: saved.transport,
+    model: saved.model,
+    effort: saved.effort,
+    models: saved.models.map((row) => ({ ...row })),
+  };
 }
 
 function sameTarget(a, b) {
   if (!a || !b) return false;
   if (a.mode !== b.mode) return false;
   if (a.mode === 'inherit') return true;
-  return (a.model || null) === (b.model || null) && (a.effort || null) === (b.effort || null);
+  if ((a.transport || null) !== (b.transport || null)) return false;
+  if ((a.model || null) !== (b.model || null)) return false;
+  if (a.mode === 'pool') {
+    const left = Array.isArray(a.models) ? a.models : [];
+    const right = Array.isArray(b.models) ? b.models : [];
+    return left.length === right.length
+      && left.every((row, index) => row && right[index] && row.id === right[index].id && row.description === right[index].description);
+  }
+  return (a.effort || null) === (b.effort || null);
 }
 
 function recomputeDraftDirty() {
@@ -1088,11 +1144,53 @@ function evaluateBinding(data) {
     if (policy.mode === 'blocked') {
       return { tone: 'bad', word: '子代理被阻止', note: policy.reason || '运行时策略禁止子代理。' };
     }
+    if (runtimeState === 'file-applied' && policy.mode === 'inherit' && runtime.mode === 'inherit') {
+      return { tone: 'ok', word: '继承已下发', note: '继承策略已写入本机配置文件；内核是否采用以它自己的重载为准。' };
+    }
     return { tone: info.tone, word: info.word, note: info.note };
   }
 
   if (policy.mode === 'blocked') {
     return { tone: 'bad', word: '子代理被阻止', note: policy.reason || '运行时策略禁止子代理。' };
+  }
+
+  if (saved.transport === 'native-config') {
+    if (runtime.transport !== 'native-config' && (runtimeState === 'loaded' || runtimeState === 'pending-policy' || runtimeState === 'waiting-launch')) {
+      return { tone: 'warn', word: '通道未切换', note: '运行时仍按旧的副本通道工作；保存的 native-config 目标在内核重载配置后才会被采用。' };
+    }
+    if (runtimeState === 'file-applied' || runtimeState === 'unverified' || runtimeState === 'waiting-config') {
+      const pool = saved.mode === 'pool' ? saved.models.length + ' 个候选模型' : saved.model;
+      const observed = runtime.observed && runtime.observed.state === 'observed-schema';
+      if (observed) {
+        return {
+          tone: saved.mode === 'pool' ? 'ok' : 'warn',
+          word: saved.mode === 'pool' ? '池已可见' : '配置已写入',
+          note: 'Kimi 发来的工具定义已包含' + (saved.mode === 'pool' ? '模型池' : '该模型')
+            + '；这只证明工具定义已更新，内核实际选用哪个模型以运行时为准。',
+        };
+      }
+      if (runtimeState !== 'file-applied') {
+        return {
+          tone: 'warn',
+          word: info.word,
+          note: '本次目标尚未落入本机配置：' + (info.note || '等待内核兼容检查与模型声明完成。')
+            + (info.tone === 'bad' ? '' : '保存后无需重复操作，面板会继续核对。'),
+        };
+      }
+      return {
+        tone: 'warn',
+        word: '已写入待内核采用',
+        note: (saved.mode === 'pool' ? '模型池（' + pool + '）' : '固定模型')
+          + '已写入本机配置文件；等 Kimi 内核重载后，工具定义与实际选用才反映新目标。',
+      };
+    }
+    if (runtimeState === 'inherit' || runtimeState === 'restored') {
+      return { tone: 'warn', word: '尚未接管', note: 'native-config 通道还没有写入本次目标；保存后等待配置文件更新。' };
+    }
+    if (runtimeState === 'loaded' && policy.transport === 'native-config') {
+      return { tone: info.tone, word: info.word, note: '旧副本通道已停止；native-config 状态见上方运行时事实。' };
+    }
+    return { tone: info.tone, word: info.word, note: info.note };
   }
 
   if (runtimeState === 'loaded') {
@@ -1101,7 +1199,8 @@ function evaluateBinding(data) {
     const effortOf = (value) => (typeof value === 'string' && value ? value : null);
     const modeAgrees = runtime.mode === 'force' && policy.mode === 'force';
     const modelAgrees = adoptedId !== null && adoptedId === policyId && policyId === saved.model;
-    const effortAgrees = effortOf(policy.effort) === effortOf(saved.effort);
+    const savedEffort = effortOf(saved.effort) || effortOf(findModel(saved.model)?.defaultEffort);
+    const effortAgrees = effortOf(policy.effort) === savedEffort;
 
     if (modeAgrees && modelAgrees && effortAgrees) {
       return { tone: 'ok', word: '已生效', note: '运行时已加载固定模型与档位，与保存目标一致。' };
@@ -1156,14 +1255,22 @@ function renderOverview(data) {
   setText(dom.factConfigFile, (data.configuration && data.configuration.file) || '—');
 
   const saved = savedTarget(data);
-  const savedModel = saved.mode === 'force' ? findModel(saved.model) : null;
-  setText(dom.savedValue, saved.mode === 'inherit' ? '继承主模型' : saved.model ? modelLabel(savedModel, saved.model) : '未选择');
-  const savedParts = saved.mode === 'force'
-    ? [saved.model, saved.effort ? '档位 ' + saved.effort : '档位自动'].filter(Boolean)
-    : ['不固定模型与档位'];
+  const savedModel = saved.mode !== 'inherit' ? findModel(saved.model) : null;
+  let savedLabel;
+  if (saved.mode === 'inherit') savedLabel = '继承主模型';
+  else if (saved.mode === 'pool') savedLabel = '模型池 · ' + fmtCount(saved.models.length) + ' 个候选';
+  else savedLabel = saved.model ? modelLabel(savedModel, saved.model) : '未选择';
+  setText(dom.savedValue, savedLabel);
+  const savedChannel = saved.transport === 'native-config' ? 'native-config' : '副本模式';
+  const savedParts = saved.mode === 'inherit'
+    ? ['不固定模型与档位']
+    : saved.mode === 'pool'
+      ? [saved.model, '默认模型 · ' + savedChannel].filter(Boolean)
+      : [saved.model, saved.effort ? '档位 ' + saved.effort : '档位自动', savedChannel].filter(Boolean);
   setText(dom.savedSub, savedParts.join(' · '));
 
-  const loaded = runtime.state === 'loaded';
+  const loaded = runtime.state === 'loaded' || runtime.state === 'file-applied';
+  const nativeLoaded = loaded && runtime.transport === 'native-config';
   const observedAlias = loaded && typeof runtime.modelAlias === 'string' ? runtime.modelAlias : null;
   const observedId = modelIdFromAlias(observedAlias);
   const observedMode = loaded && typeof runtime.mode === 'string' ? runtime.mode : null;
@@ -1173,10 +1280,15 @@ function renderOverview(data) {
       ? '继承主模型'
       : observedId
         ? modelLabel(findModel(observedId), observedId)
-        : '未固定模型';
+        : nativeLoaded && saved.mode === 'pool'
+          ? '模型池 · ' + fmtCount(saved.models.length) + ' 个候选'
+          : nativeLoaded && saved.model
+            ? modelLabel(findModel(saved.model), saved.model)
+            : '未固定模型';
   setText(dom.adoptedValue, adoptedLabel);
   const adoptedParts = loaded
-    ? [observedMode ? '模式 ' + observedMode : '', observedAlias || '', runtime.version ? 'v' + runtime.version : ''].filter(Boolean)
+    ? [observedMode ? '模式 ' + observedMode : '', observedAlias || (nativeLoaded ? '本机配置文件（内核未回报具体模型）' : ''),
+      runtime.version ? 'v' + runtime.version : ''].filter(Boolean)
     : ['运行时尚未加载策略'];
   setText(dom.adoptedSub, adoptedParts.join(' · '));
 
@@ -1322,7 +1434,7 @@ let modelSignature = '';
 function renderModels() {
   const data = state.data;
   const { all, filtered } = filterModels();
-  const saved = data ? savedTarget(data) : { mode: 'inherit', model: null };
+  const saved = data ? savedTarget(data) : { mode: 'inherit', model: null, models: [] };
   const signature = JSON.stringify([
     filtered.map(canonicalModel),
     state.editor ? state.editor.originalId : null,
@@ -1373,7 +1485,7 @@ function buildModelRow(model, saved) {
   const tr = document.createElement('tr');
   tr.dataset.modelId = model.id;
   if (state.editor && state.editor.originalId === model.id) tr.dataset.editing = 'true';
-  if (saved.mode === 'force' && saved.model === model.id) tr.dataset.saved = 'true';
+  if (saved.mode !== 'inherit' && saved.model === model.id) tr.dataset.saved = 'true';
 
   const idCell = document.createElement('td');
   const id = document.createElement('span');
@@ -1387,10 +1499,10 @@ function buildModelRow(model, saved) {
     name.textContent = model.name;
     idCell.append(name);
   }
-  if (saved.mode === 'force' && saved.model === model.id) {
+  if (saved.mode !== 'inherit' && saved.model === model.id) {
     const flag = document.createElement('span');
     flag.className = 'tag tag--saved';
-    flag.textContent = '子代理';
+    flag.textContent = saved.mode === 'pool' ? '池默认' : '子代理';
     idCell.append(flag);
   }
 
@@ -1676,87 +1788,252 @@ function evaluateSubagentDraft(draft, data) {
   const notes = [];
   if (!data) return { problems, notes };
   if (!configReady(data)) problems.push('配置当前不是就绪状态，保存已禁用。重启面板后可再次保存。');
-  if (!draft || draft.mode !== 'force') return { problems, notes };
+  if (!draft || draft.mode === 'inherit') return { problems, notes };
 
   const list = Array.isArray(data.models) ? data.models : [];
   const model = draft.model ? list.find((row) => row && row.id === draft.model) || null : null;
   if (!draft.model) problems.push('尚未选择模型。');
   else if (!model) problems.push('所选模型已不在目录中，请重新选择。');
   else if (!isCapable(model)) problems.push('所选模型未声明工具调用，不能作为子代理。');
-  else if (!model.reasoning) notes.push('所选模型未声明推理能力，保存时将使用自动档位。');
+
+  if (draft.mode === 'pool') {
+    const pool = Array.isArray(draft.models) ? draft.models : [];
+    const ids = new Set(pool.map((row) => row && row.id));
+    if (!pool.length) problems.push('候选列表为空，至少加入 1 个模型。');
+    if (pool.length > 32) problems.push('候选模型最多 32 个。');
+    if (pool.some((row) => !row || typeof row.description !== 'string' || !row.description.trim())) {
+      problems.push('每个候选模型都需要用途说明。');
+    }
+    if (pool.some((row) => row && row.id && !list.some((entry) => entry && entry.id === row.id))) {
+      problems.push('候选列表中有模型已不在目录中，请移除后重新选择。');
+    } else if (pool.some((row) => row && row.id && !isCapable(list.find((entry) => entry && entry.id === row.id)))) {
+      problems.push('候选列表中有模型未声明工具调用，不能作为子代理。');
+    }
+    if (draft.model && !ids.has(draft.model)) problems.push('默认模型必须在候选列表中。');
+    return { problems, notes };
+  }
 
   if (draft.effort && model && !declaredEfforts(model).includes(draft.effort)) {
     problems.push('该模型未声明档位 ' + draft.effort + '。请到「模型管理」补充该档位，或改选其他档位。');
   }
+  if (!draft.effort && model && !model.reasoning) notes.push('所选模型未声明推理能力，保存时将使用自动档位。');
   return { problems, notes };
 }
 
 let saModelSignature = '';
 let saEffortSignature = '';
 
+/* 池条目在草稿里的规范形态：只保留 id 与单行用途说明。 */
+function poolRow(id, description) {
+  return { id, description: String(description || '').replace(/[\r\n\t ]+/g, ' ').trim() };
+}
+
+function poolDraftIds(draft) {
+  const pool = draft && draft.mode === 'pool' && Array.isArray(draft.models) ? draft.models : [];
+  return new Set(pool.map((row) => row.id));
+}
+
+function syncSelectOptions(select, options, current) {
+  if (!select) return;
+  const signature = JSON.stringify(options) + '#' + (current || '');
+  if (select.dataset.signature === signature) {
+    select.value = current || '';
+    return;
+  }
+  select.dataset.signature = signature;
+  select.replaceChildren(...options.map((option) => {
+    const node = document.createElement('option');
+    node.value = option.value;
+    node.textContent = option.label;
+    return node;
+  }));
+  select.value = current || '';
+}
+
+function renderPoolList(draft, capable) {
+  if (!dom.saPoolList) return;
+  const pool = draft.mode === 'pool' && Array.isArray(draft.models) ? draft.models : [];
+  const signature = JSON.stringify([pool, state.subagentSaving]);
+  if (dom.saPoolList.dataset.signature === signature) return;
+  dom.saPoolList.dataset.signature = signature;
+  const rows = pool.map((row) => {
+    const item = document.createElement('div');
+    item.className = 'pool__row';
+    const model = capable.find((entry) => entry.id === row.id) || null;
+    const head = document.createElement('p');
+    head.className = 'pool__head';
+    const id = document.createElement('span');
+    id.className = 'mono cell-id';
+    id.textContent = row.id;
+    id.setAttribute('title', row.id);
+    head.append(id);
+    if (row.id === draft.model) {
+      const flag = document.createElement('span');
+      flag.className = 'tag tag--saved';
+      flag.textContent = '默认';
+      head.append(flag);
+    }
+    if (model && model.name && model.name !== row.id) {
+      const name = document.createElement('span');
+      name.className = 'pool__name';
+      name.textContent = model.name;
+      head.append(name);
+    }
+    const note = document.createElement('p');
+    note.className = 'pool__note';
+    note.textContent = row.description || '—';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'iconbtn iconbtn--danger pool__remove';
+    remove.dataset.poolRemove = row.id;
+    remove.setAttribute('aria-label', '从池中移除 ' + row.id);
+    remove.disabled = state.subagentSaving;
+    remove.append(iconUse('i-trash'));
+    item.append(head, note, remove);
+    return item;
+  });
+  const empty = document.createElement('p');
+  empty.className = 'pool__empty';
+  empty.textContent = pool.length
+    ? (pool.length >= 32 ? '候选已达上限 32 个。' : '')
+    : '还没有候选模型。选择模型、填写用途后点「加入池」。';
+  if (empty.textContent) rows.push(empty);
+  dom.saPoolList.replaceChildren(...rows);
+}
+
 function renderSubagents() {
   const data = state.data;
   if (!data) return;
-  const draft = state.draft || { mode: 'inherit', model: null, effort: null };
+  const draft = state.draft || draftFromSaved(data);
   const ready = configReady(data);
   const busy = isInFlight(data.operation);
 
   if (dom.modeInherit) dom.modeInherit.checked = draft.mode === 'inherit';
   if (dom.modeForce) dom.modeForce.checked = draft.mode === 'force';
-  if (dom.modeInherit) dom.modeInherit.disabled = !ready || busy;
-  if (dom.modeForce) dom.modeForce.disabled = !ready || busy;
+  if (dom.modePool) dom.modePool.checked = draft.mode === 'pool';
+  for (const radio of [dom.modeInherit, dom.modeForce, dom.modePool]) {
+    if (radio) radio.disabled = !ready || busy;
+  }
+
+  setHidden(dom.saForceFields, draft.mode !== 'force');
+  setHidden(dom.saPoolFields, draft.mode !== 'pool');
+
+  /* native-config 通道开关只在 force/pool 出现；pool 固定走 native-config。
+     旧 force 配置首次载入草稿时不勾选，保存后才会启用新通道。 */
+  const nativeApplies = draft.mode === 'force' || draft.mode === 'pool';
+  setHidden(dom.saNativeRow, !nativeApplies);
+  if (dom.saNative) {
+    dom.saNative.checked = draft.transport === 'native-config';
+    /* pool 固定走 native-config，开关只读；force 才是用户真正的选择。 */
+    dom.saNative.disabled = !ready || busy || state.subagentSaving || draft.mode === 'pool';
+  }
+  if (dom.saNativeHint) {
+    setText(dom.saNativeHint, draft.mode === 'pool'
+      ? '模型池固定通过本机配置文件（native-config）下发；写入成功只代表文件已更新，是否被内核重载采用见运行时状态。'
+      : '保存后写入 Kimi 的 secondaryModel 配置；写入成功只代表文件已更新，是否被内核重载采用见运行时状态。不勾选时保持副本模式，保存不改变现有通道。');
+  }
 
   const capable = capableModels();
-  const modelSignature = JSON.stringify([capable.map((model) => [model.id, model.name || '']), draft.model]);
-  if (modelSignature !== saModelSignature) {
-    saModelSignature = modelSignature;
-    const options = [{ value: '', label: '选择模型' }].concat(capable.map((model) => ({
+  const { problems, notes } = evaluateSubagentDraft(draft, data);
+
+  if (draft.mode === 'pool') {
+    const poolIds = poolDraftIds(draft);
+    const remaining = capable.filter((model) => !poolIds.has(model.id));
+    const pendingAdd = dom.saPoolAdd && remaining.some((model) => model.id === dom.saPoolAdd.value)
+      ? dom.saPoolAdd.value : '';
+    syncSelectOptions(dom.saPoolAdd, [{ value: '', label: '选择要加入的模型' }].concat(remaining.map((model) => ({
       value: model.id,
       label: modelLabel(model, model.id) + ' · ' + model.id,
-    })));
-    if (draft.model && !capable.some((model) => model.id === draft.model)) {
-      options.push({ value: draft.model, label: '（不在目录）' + draft.model });
+    }))), pendingAdd);
+    if (dom.saPoolAdd) dom.saPoolAdd.disabled = !ready || busy || state.subagentSaving || poolIds.size >= 32;
+    if (dom.saPoolAppend) {
+      dom.saPoolAppend.disabled = !ready || busy || state.subagentSaving
+        || !dom.saPoolAdd || !dom.saPoolAdd.value;
+    }
+
+    const defaultOptions = poolIds.size
+      ? Array.from(poolIds).map((id) => {
+        const model = capable.find((entry) => entry.id === id) || null;
+        return { value: id, label: modelLabel(model, id) + ' · ' + id };
+      })
+      : [{ value: '', label: '先加入候选模型' }];
+    syncSelectOptions(dom.saPoolDefault, defaultOptions, draft.model || '');
+    if (dom.saPoolDefault) dom.saPoolDefault.disabled = !ready || busy || state.subagentSaving || !poolIds.size;
+
+    renderPoolList(draft, capable);
+
+    if (dom.saPoolErrors) {
+      const poolProblems = [];
+      if (draft.model && !poolIds.has(draft.model)) poolProblems.push('默认模型必须在候选列表中。');
+      if (poolIds.size > 32) poolProblems.push('候选模型最多 32 个。');
+      if (Array.isArray(draft.models) && draft.models.some((row) => !row || !String(row.description || '').trim())) {
+        poolProblems.push('每个候选模型都需要用途说明。');
+      }
+      setHidden(dom.saPoolErrors, poolProblems.length === 0);
+      dom.saPoolErrors.replaceChildren(...poolProblems.map((message) => {
+        const p = document.createElement('p');
+        p.textContent = message;
+        return p;
+      }));
+    }
+    if (dom.saModelHint) setText(dom.saModelHint, '候选 ' + poolIds.size + ' / 32 · 只能加入声明支持工具调用的模型。');
+    if (dom.saEffortHint) setText(dom.saEffortHint, '模型池不设统一思考档位，各模型使用自身默认档位。');
+  } else {
+    const modelSignature = JSON.stringify([capable.map((model) => [model.id, model.name || '']), draft.model]);
+    if (modelSignature !== saModelSignature) {
+      saModelSignature = modelSignature;
+      const options = [{ value: '', label: '选择模型' }].concat(capable.map((model) => ({
+        value: model.id,
+        label: modelLabel(model, model.id) + ' · ' + model.id,
+      })));
+      if (draft.model && !capable.some((model) => model.id === draft.model)) {
+        options.push({ value: draft.model, label: '（不在目录）' + draft.model });
+      }
+      if (dom.saModel) {
+        dom.saModel.replaceChildren(...options.map((option) => {
+          const node = document.createElement('option');
+          node.value = option.value;
+          node.textContent = option.label;
+          return node;
+        }));
+      }
     }
     if (dom.saModel) {
-      dom.saModel.replaceChildren(...options.map((option) => {
-        const node = document.createElement('option');
-        node.value = option.value;
-        node.textContent = option.label;
-        return node;
-      }));
+      dom.saModel.value = draft.model || '';
+      dom.saModel.disabled = draft.mode !== 'force' || !ready || busy;
     }
-  }
-  if (dom.saModel) {
-    dom.saModel.value = draft.model || '';
-    dom.saModel.disabled = draft.mode !== 'force' || !ready || busy;
-  }
 
-  const model = draft.model ? findModel(draft.model) : null;
-  const list = declaredEfforts(model);
-  const extra = draft.effort && !list.includes(draft.effort) ? draft.effort : null;
-  const effortSignature = JSON.stringify([list, model && model.defaultEffort, extra, draft.mode, draft.model]);
-  if (effortSignature !== saEffortSignature) {
-    saEffortSignature = effortSignature;
-    const options = [{ value: '', label: model && model.defaultEffort ? '自动（默认 ' + model.defaultEffort + '）' : '自动' }];
-    list.forEach((value) => {
-      options.push({ value, label: value === (model && model.defaultEffort) ? value + '（默认）' : value });
-    });
-    if (extra) options.push({ value: extra, label: extra + '（未声明）' });
+    const model = draft.model ? findModel(draft.model) : null;
+    const list = declaredEfforts(model);
+    const extra = draft.effort && !list.includes(draft.effort) ? draft.effort : null;
+    const effortSignature = JSON.stringify([list, model && model.defaultEffort, extra, draft.mode, draft.model]);
+    if (effortSignature !== saEffortSignature) {
+      saEffortSignature = effortSignature;
+      const options = [{ value: '', label: model && model.defaultEffort ? '自动（默认 ' + model.defaultEffort + '）' : '自动' }];
+      list.forEach((value) => {
+        options.push({ value, label: value === (model && model.defaultEffort) ? value + '（默认）' : value });
+      });
+      if (extra) options.push({ value: extra, label: extra + '（未声明）' });
+      if (dom.saEffort) {
+        dom.saEffort.replaceChildren(...options.map((option) => {
+          const node = document.createElement('option');
+          node.value = option.value;
+          node.textContent = option.label;
+          return node;
+        }));
+      }
+    }
     if (dom.saEffort) {
-      dom.saEffort.replaceChildren(...options.map((option) => {
-        const node = document.createElement('option');
-        node.value = option.value;
-        node.textContent = option.label;
-        return node;
-      }));
+      dom.saEffort.value = draft.effort || '';
+      dom.saEffort.disabled = draft.mode !== 'force' || !model || !ready || busy;
+    }
+    if (dom.saModelHint) setText(dom.saModelHint, '只列出声明支持工具调用的模型，共 ' + capable.length + ' 个。');
+    if (dom.saEffortHint) {
+      setText(dom.saEffortHint, notes[0] || (model
+        ? (list.length ? '来自该模型声明的 ' + list.length + ' 个档位。' : '该模型未声明档位，只能使用自动。')
+        : '先选择模型。'));
     }
   }
-  if (dom.saEffort) {
-    dom.saEffort.value = draft.effort || '';
-    dom.saEffort.disabled = draft.mode !== 'force' || !model || !ready || busy;
-  }
-
-  const { problems, notes } = evaluateSubagentDraft(draft, data);
 
   if (dom.saWarning) {
     setHidden(dom.saWarning, problems.length === 0);
@@ -1777,15 +2054,6 @@ function renderSubagents() {
       });
       dom.saWarning.append(jump);
     }
-  }
-
-  if (dom.saModelHint) {
-    setText(dom.saModelHint, '只列出声明支持工具调用的模型，共 ' + capable.length + ' 个。');
-  }
-  if (dom.saEffortHint) {
-    setText(dom.saEffortHint, notes[0] || (model
-      ? (list.length ? '来自该模型声明的 ' + list.length + ' 个档位。' : '该模型未声明档位，只能使用自动。')
-      : '先选择模型。'));
   }
 
   const dirty = state.draftDirty;
@@ -1815,6 +2083,27 @@ function renderSubagents() {
   setText(dom.rtSpawn, spawn && typeof spawn.at === 'number'
     ? fmtTime(spawn.at) + (spawn.modelAlias ? ' · ' + spawn.modelAlias : '')
     : '—');
+
+  /* native-config 专属事实：observed 只证明 Work 发来的工具定义已含模型池，
+     compatibility 只说明内核源码结构与契约一致；两者都不是“内核已采用”。 */
+  const native = runtime.transport === 'native-config'
+    || ['file-applied', 'waiting-config', 'restored', 'unverified', 'inherit'].includes(runtime.state);
+  setHidden(dom.rtNativeFacts, !native);
+  setHidden(dom.rtObservedFact, !native);
+  if (native) {
+    const observedLive = runtime.observed && runtime.observed.state === 'observed-schema';
+    setText(dom.rtObserved, observedLive
+      ? '已出现在工具定义 · ' + fmtTime(runtime.observed.at)
+      : '尚未观察到');
+    const compat = runtime.compatibility;
+    if (compat && compat.state === 'source-compatible') {
+      setText(dom.rtCompat, '契约一致');
+      setText(dom.rtCompatSub, 'Kimi ' + (compat.version || '—') + ' 的内核包含模型池配置段，可写入 secondaryModel 配置。');
+    } else {
+      setText(dom.rtCompat, '未验证');
+      setText(dom.rtCompatSub, compat && compat.reason ? reasonText(compat.reason) : '尚未通过内核源码契约检查，写入会被拒绝。');
+    }
+  }
 
   const verdict = evaluateBinding(data);
   setDot(dom.saVerdictDot, verdict.tone);
@@ -2844,6 +3133,11 @@ async function saveSubagentTarget() {
     if (state.draft.mode === 'force') {
       payload.model = state.draft.model;
       if (state.draft.effort) payload.effort = state.draft.effort;
+      if (state.draft.transport === 'native-config') payload.transport = 'native-config';
+    } else if (state.draft.mode === 'pool') {
+      payload.model = state.draft.model;
+      payload.transport = 'native-config';
+      payload.models = state.draft.models;
     }
     const res = await request(API.subagents, { method: 'POST', body: payload });
     if (res && res.state) {
@@ -2855,7 +3149,11 @@ async function saveSubagentTarget() {
       renderAll();
       showToast(state.draft.mode === 'inherit'
         ? '已保存为继承主模型，对后续新建的子代理生效。'
-        : '目标已保存并应用，对后续新建的子代理生效。', 'ok');
+        : state.draft.mode === 'pool'
+          ? '模型池设置已保存；配置写入与内核采用情况见运行时状态。'
+          : state.draft.transport === 'native-config'
+            ? '目标设置已保存；配置写入与内核采用情况见运行时状态。'
+            : '目标已保存并应用，对后续新建的子代理生效。', 'ok');
     } else {
       state.subagentSaving = false;
       await loadState({ silent: true });
@@ -3009,15 +3307,37 @@ async function handleSaveFailure(error, context) {
 
 function setMode(mode) {
   if (!state.draft || !configReady(state.data)) return;
-  if (mode === state.draft.mode) return;
+  if (!['inherit', 'force', 'pool'].includes(mode) || mode === state.draft.mode) return;
+  const saved = state.data ? savedTarget(state.data) : null;
   if (mode === 'inherit') {
-    state.draft = { mode: 'inherit', model: null, effort: null };
+    state.draft = { mode: 'inherit', transport: null, model: null, effort: null, models: [] };
+  } else if (mode === 'pool') {
+    /* 池从旧目标热身：只保留已有用途说明的候选，其余由用户显式加入。 */
+    const seen = new Set();
+    const seed = [];
+    const push = (id, description) => {
+      if (typeof id !== 'string' || !id || seen.has(id)) return;
+      const model = findModel(id);
+      if (!model || !isCapable(model)) return;
+      const row = poolRow(id, description);
+      if (!row.description) return;
+      seen.add(id);
+      seed.push(row);
+    };
+    (Array.isArray(state.draft.models) ? state.draft.models : []).forEach((row) => push(row && row.id, row && row.description));
+    if (saved && Array.isArray(saved.models)) saved.models.forEach((row) => push(row.id, row.description));
+    state.draft = {
+      mode: 'pool',
+      transport: 'native-config',
+      model: seed.some((row) => row.id === (saved && saved.model)) ? saved.model : seed.length ? seed[0].id : null,
+      effort: null,
+      models: seed,
+    };
   } else {
-    const saved = state.data ? savedTarget(state.data) : null;
-    const seed = (saved && saved.mode === 'force' && saved.model && isCapable(findModel(saved.model)) && saved.model)
+    const seed = (saved && saved.mode !== 'inherit' && saved.model && isCapable(findModel(saved.model)) && saved.model)
       || (state.draft.model && isCapable(findModel(state.draft.model)) && state.draft.model)
       || (capableModels()[0] ? capableModels()[0].id : null);
-    state.draft = { mode: 'force', model: seed || null, effort: null };
+    state.draft = { mode: 'force', transport: saved && saved.transport === 'native-config' ? 'native-config' : null, model: seed || null, effort: null, models: [] };
   }
   recomputeDraftDirty();
   renderSubagents();
@@ -3025,10 +3345,10 @@ function setMode(mode) {
 }
 
 function pickModel(id) {
-  if (!state.draft) return;
+  if (!state.draft || state.draft.mode !== 'force') return;
   const model = findModel(id);
   if (!model || !isCapable(model)) return;
-  state.draft = { mode: 'force', model: id, effort: state.draft.model === id ? state.draft.effort : null };
+  state.draft = { ...state.draft, model: id, effort: state.draft.model === id ? state.draft.effort : null };
   recomputeDraftDirty();
   renderSubagents();
   renderModels();
@@ -3037,6 +3357,47 @@ function pickModel(id) {
 function pickEffort(value) {
   if (!state.draft || state.draft.mode !== 'force') return;
   state.draft = { ...state.draft, effort: value || null };
+  recomputeDraftDirty();
+  renderSubagents();
+}
+
+function pickPoolDefault(id) {
+  if (!state.draft || state.draft.mode !== 'pool') return;
+  if (!id || !poolDraftIds(state.draft).has(id)) return;
+  state.draft = { ...state.draft, model: id };
+  recomputeDraftDirty();
+  renderSubagents();
+  renderModels();
+}
+
+function appendPoolModel(id, description) {
+  if (!state.draft || state.draft.mode !== 'pool') return;
+  const model = findModel(id);
+  if (!model || !isCapable(model)) return;
+  const row = poolRow(id, description);
+  if (!row.description) return;
+  if (poolDraftIds(state.draft).has(id)) return;
+  if (state.draft.models.length >= 32) return;
+  state.draft = { ...state.draft, models: state.draft.models.concat([row]) };
+  recomputeDraftDirty();
+  renderSubagents();
+}
+
+function removePoolModel(id) {
+  if (!state.draft || state.draft.mode !== 'pool') return;
+  if (!poolDraftIds(state.draft).has(id)) return;
+  const models = state.draft.models.filter((row) => row.id !== id);
+  const model = state.draft.model === id ? null : state.draft.model;
+  state.draft = { ...state.draft, model, models };
+  recomputeDraftDirty();
+  renderSubagents();
+  renderModels();
+}
+
+function toggleTransport(enabled) {
+  if (!state.draft || state.draft.mode === 'inherit') return;
+  if (state.draft.mode === 'pool') return;
+  state.draft = { ...state.draft, transport: enabled === true ? 'native-config' : null };
   recomputeDraftDirty();
   renderSubagents();
 }
@@ -3102,10 +3463,31 @@ function bindEvents() {
   if (dom.saModes) dom.saModes.addEventListener('change', (event) => {
     const target = event.target;
     if (!target || target.name !== 'mode') return;
-    setMode(target.value === 'force' ? 'force' : 'inherit');
+    setMode(['force', 'pool'].includes(target.value) ? target.value : 'inherit');
   });
   if (dom.saModel) dom.saModel.addEventListener('change', () => pickModel(dom.saModel.value));
   if (dom.saEffort) dom.saEffort.addEventListener('change', () => pickEffort(dom.saEffort.value));
+  if (dom.saPoolDefault) dom.saPoolDefault.addEventListener('change', () => pickPoolDefault(dom.saPoolDefault.value));
+  if (dom.saPoolAdd) dom.saPoolAdd.addEventListener('change', () => {
+    const usable = Boolean(state.data && configReady(state.data)) && !isInFlight(state.data.operation);
+    if (dom.saPoolAppend) dom.saPoolAppend.disabled = !usable || !dom.saPoolAdd.value || state.subagentSaving;
+  });
+  if (dom.saPoolAppend) dom.saPoolAppend.addEventListener('click', () => {
+    const id = dom.saPoolAdd ? dom.saPoolAdd.value : '';
+    const description = dom.saPoolDesc ? dom.saPoolDesc.value : '';
+    if (!id) return;
+    appendPoolModel(id, description);
+    if (dom.saPoolDesc) dom.saPoolDesc.value = '';
+    if (dom.saPoolDescHint) setHidden(dom.saPoolDescHint, false);
+  });
+  if (dom.saPoolList) dom.saPoolList.addEventListener('click', (event) => {
+    const node = event.target && event.target.closest ? event.target.closest('[data-pool-remove]') : null;
+    if (!node) return;
+    removePoolModel(node.dataset.poolRemove);
+  });
+  if (dom.saNative) dom.saNative.addEventListener('change', () => {
+    toggleTransport(dom.saNative ? dom.saNative.checked : false);
+  });
   if (dom.saReset) dom.saReset.addEventListener('click', discardDraft);
   if (dom.saSave) dom.saSave.addEventListener('click', saveSubagentTarget);
 
@@ -3309,7 +3691,6 @@ function adoptLocationKey() {
   recentSignature = '';
   saModelSignature = '';
   saEffortSignature = '';
-
   stopPolling();
   setHidden(dom.conn, true);
   dom.toast.hidden = true;
@@ -3318,8 +3699,7 @@ function adoptLocationKey() {
   loadState().then((ok) => {
     if (ok) startPolling();
   });
-  return true;
-}
+  return true;}
 
 /* ---------- boot ---------- */
 

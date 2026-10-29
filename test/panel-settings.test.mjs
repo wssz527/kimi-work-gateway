@@ -226,3 +226,23 @@ test('request history is bounded metadata and preserves upstream HTTP failures w
   expect(JSON.stringify(state)).not.toContain('private synthetic prompt');
   expect(JSON.stringify(state)).not.toContain('synthetic upstream response');
 });
+
+test('the panel pool API persists the default, exposes native evidence and protects selected models', async () => {
+  const f = await fixture();
+  const observed = { state: 'observed-schema', at: Date.now() };
+  f.policy.nativeSubagents = { update: policy => ({ state: policy.mode === 'inherit' ? 'restored' : 'file-applied',
+    transport: 'native-config', observed, compatibility: { state: 'source-compatible', version: 'synthetic' } }) };
+  const response = await api(f, '/api/subagents', { revision: await revision(f), mode: 'pool', transport: 'native-config',
+    model: CHILD, models: [{ id: CHILD, description: 'Independent review' }] });
+  expect(response.status).toBe(200);
+  const state = (await response.json()).state;
+  expect(state.subagents.policy).toMatchObject({ mode: 'pool', transport: 'native-config', model: CHILD });
+  expect(state.subagents.configured.models).toHaveLength(1);
+  expect(state.subagents.runtime).toMatchObject({ state: 'file-applied', transport: 'native-config', observed });
+  const removed = await api(f, '/api/models', { revision: state.revision, models: [] });
+  expect(removed.status).toBe(409);
+  expect((await removed.json()).error.code).toBe('subagent_model_in_use');
+  const inherited = await api(f, '/api/subagents', { revision: state.revision, mode: 'inherit', transport: 'native-config' });
+  expect(inherited.status).toBe(200);
+  expect((await inherited.json()).state.subagents.runtime.state).toBe('restored');
+});

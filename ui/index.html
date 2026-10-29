@@ -327,13 +327,13 @@
           <p>保存后写入策略，只影响之后新建的子代理会话。</p>
         </div>
 
-        <fieldset class="choices" id="sa-modes">
+        <fieldset class="choices choices--three" id="sa-modes">
           <legend class="sr-only">子代理模式</legend>
           <label class="choice">
             <input type="radio" name="mode" value="inherit" id="mode-inherit">
             <span class="choice__body">
               <span class="choice__title">继承主模型</span>
-              <span class="choice__note">跟随 Kimi Work 菜单中当前的主模型，不固定模型与档位。</span>
+              <span class="choice__note">跟随 Kimi Work 菜单中当前的主模型，并撤销本面板管理的目标。</span>
             </span>
           </label>
           <label class="choice">
@@ -343,9 +343,16 @@
               <span class="choice__note">固定使用目录中的一个模型，可另设思考档位。</span>
             </span>
           </label>
+          <label class="choice">
+            <input type="radio" name="mode" value="pool" id="mode-pool">
+            <span class="choice__body">
+              <span class="choice__title">模型池</span>
+              <span class="choice__note">给出候选模型与用途，由主模型在创建子代理时选择。</span>
+            </span>
+          </label>
         </fieldset>
 
-        <div class="field-row">
+        <div class="field-row" id="sa-force-fields">
           <label class="field">
             <span class="field__label">模型</span>
             <select id="sa-model"></select>
@@ -357,6 +364,40 @@
             <span class="field__hint" id="sa-effort-hint">只列出该模型声明的档位。</span>
           </label>
         </div>
+
+        <div id="sa-pool-fields" hidden>
+          <div class="field-row">
+            <label class="field">
+              <span class="field__label">默认模型</span>
+              <select id="sa-pool-default"></select>
+              <span class="field__hint" id="sa-pool-default-hint">默认模型必须已在候选列表中。</span>
+            </label>
+            <div class="field">
+              <span class="field__label">候选模型</span>
+              <select id="sa-pool-add"></select>
+              <span class="field__hint">只列出声明支持工具调用、尚未加入池的模型。</span>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field__label">用途说明</span>
+            <input id="sa-pool-desc" class="mono" autocomplete="off" spellcheck="false" maxlength="1000" placeholder="例如：负责代码审查与重构建议">
+            <span class="field__hint" id="sa-pool-desc-hint">单行用途说明，最长 1000 字符；填写后点「加入池」，内核会把说明展示给子代理选择器。</span>
+          </div>
+          <p class="errors" id="sa-pool-errors" hidden></p>
+          <div class="panel__actions panel__actions--start">
+            <button class="btn btn--outline btn--sm" id="sa-pool-append" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>加入池
+            </button>
+          </div>
+          <div class="pool-list" id="sa-pool-list"></div>
+          <p class="hint">每个候选模型都会随 Agent、Swarm 与 Tower 工具定义一起发给 Kimi；这些工具未启用时，池不会被使用。</p>
+        </div>
+
+        <label class="check check--lead check--channel" id="sa-native-row" hidden>
+          <input type="checkbox" id="sa-native">
+          <span>通过本机配置文件下发（native-config）</span>
+          <span class="field__hint" id="sa-native-hint">保存后写入 Kimi 的 secondaryModel 配置；写入成功只代表文件已更新，是否被内核重载采用见上方运行时状态。不勾选时保持副本模式，保存不改变现有通道。</span>
+        </label>
 
         <p class="note note--warn" id="sa-warning" hidden></p>
 
@@ -370,7 +411,7 @@
       <div class="panel">
         <div class="panel__head">
           <h2>运行时</h2>
-          <p>本机副本此刻观测到的状态，与保存的选择分开判断。</p>
+          <p>本机副本或原生配置通道此刻观测到的状态，与保存的选择分开判断。</p>
         </div>
         <dl class="facts facts--compact">
           <div class="fact">
@@ -380,6 +421,17 @@
           <div class="fact"><dt>版本</dt><dd class="mono" id="rt-version">—</dd></div>
           <div class="fact"><dt>模式</dt><dd class="mono" id="rt-mode">—</dd></div>
           <div class="fact"><dt>最近启动</dt><dd class="mono" id="rt-spawn">—</dd></div>
+        </dl>
+        <dl class="facts facts--compact" id="rt-native-facts" hidden>
+          <div class="fact" id="rt-observed-fact" hidden>
+            <dt>工具定义</dt>
+            <dd id="rt-observed">—</dd>
+          </div>
+          <div class="fact">
+            <dt>内核适配</dt>
+            <dd id="rt-compat">—</dd>
+            <p class="fact__sub" id="rt-compat-sub">—</p>
+          </div>
         </dl>
         <p class="verdict" id="sa-verdict">
           <span class="dot" id="sa-verdict-dot" data-tone="neutral"></span>

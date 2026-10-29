@@ -5,11 +5,21 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findSubagentInstallation } from '../src/subagent-runtime.mjs';
+import { inspectSubagentLaunchContract } from '../src/subagent-launch-contract.mjs';
 
-let installed = false;
-try { findSubagentInstallation(); installed = true; } catch {}
+let installed = false, launchState = 'unavailable';
+try {
+  const installation = findSubagentInstallation();
+  installed = Boolean(installation.bundleDir);
+  if (installed) launchState = inspectSubagentLaunchContract(installation.archive).state;
+} catch {}
 const node = spawnSync('node', ['--version'], { encoding: 'utf8' });
-const capable = installed && node.status === 0 && Number(node.stdout.match(/^v(\d+)/)?.[1]) >= 24;
+// The copy channel is only meaningful while the desktop still accepts a
+// bundle override. A version that refuses it (or no longer ships copyable
+// links) has no copy path to adapt, so the direct-kernel check is skipped
+// rather than reported as a failure of this package.
+const capable = installed && launchState === 'supported'
+  && node.status === 0 && Number(node.stdout.match(/^v(\d+)/)?.[1]) >= 24;
 
 test.skipIf(!capable)('the adapted installed kernel runs native subagents via direct import and an isolated gateway', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kwg-native-subagents-'));

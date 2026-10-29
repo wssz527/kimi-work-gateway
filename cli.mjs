@@ -4,7 +4,7 @@ import path from 'node:path';
 import { readConfig } from './src/config.mjs';
 import { BYOK_DNS_PORT, KimiWorkGateway, NativeByokDNS, NativeSetup, OpenAIBackend,
   copySetupToken, defaultKimiDirectory, defaultStateDirectory, nativeFlagFile,
-  inspectKimiContract, summarizeKimiContract, SubagentPolicy, SubagentRuntime } from './src/index.mjs';
+  inspectKimiContract, summarizeKimiContract, SubagentPolicy, SubagentRuntime, bindNativeSubagents } from './src/index.mjs';
 import { readSubagentJSON } from './src/subagent-policy.mjs';
 import { PanelController } from './src/panel-controller.mjs';
 import { GatewayPanel } from './src/panel.mjs';
@@ -52,7 +52,8 @@ const USAGE = [
 // conflicting, 9 an unsupported kernel or launch contract.
 const SETUP_EXIT = { done: 0, 'resolver-conflict': 4, cancelled: 5, interrupted: 6, failed: 7, 'unsupported-platform': 8 };
 const COMPAT_EXIT = { verified: 0, unverified: 0, unavailable: 0, incompatible: 9 };
-const SUBAGENT_INCOMPATIBLE = new Set(['subagent_runtime_incompatible', 'subagent_runtime_already_adapted', 'subagent_launch_unsupported']);
+const SUBAGENT_INCOMPATIBLE = new Set(['subagent_runtime_incompatible', 'subagent_runtime_already_adapted', 'subagent_launch_unsupported',
+  'subagent_bundle_link_conflict', 'subagent_bundle_file_conflict']);
 
 function streams(io) {
   return {
@@ -101,10 +102,11 @@ async function readStdin() {
 // Only the fields that describe the selection, never credentials or upstream
 // settings, are reported in status.json, logs and command output.
 function summarizeSubagentPolicy(policy) {
-  if (policy.mode !== 'force' && policy.mode !== 'blocked') return { mode: 'inherit' };
+  if (!['force', 'pool', 'blocked'].includes(policy.mode)) return { mode: 'inherit', ...(policy.transport ? { transport: policy.transport } : {}) };
   if (policy.mode === 'blocked') return { mode: 'blocked', ...(policy.reason ? { reason: String(policy.reason) } : {}) };
-  return { mode: 'force', model: policy.model, ...(policy.modelAlias ? { modelAlias: policy.modelAlias } : {}),
-    ...(policy.effort === undefined ? {} : { effort: policy.effort }) };
+  return { mode: policy.mode, ...(policy.transport ? { transport: policy.transport } : {}),
+    model: policy.model, ...(policy.modelAlias ? { modelAlias: policy.modelAlias } : {}),
+    ...(policy.models ? { models: policy.models } : {}), ...(policy.effort === undefined ? {} : { effort: policy.effort }) };
 }
 
 function describeSubagentPolicy(summary) {
@@ -112,6 +114,7 @@ function describeSubagentPolicy(summary) {
     return 'force ' + (summary.modelAlias || summary.model) + (summary.effort === undefined ? '' : ' (' + summary.effort + ')');
   }
   if (summary.mode === 'blocked') return 'blocked (' + (summary.reason || 'model unavailable') + ')';
+  if (summary.mode === 'pool') return 'pool ' + (summary.modelAlias || summary.model) + ' (' + (Array.isArray(summary.models) ? summary.models.length : 'unknown') + ' models)';
   return 'inherit';
 }
 
@@ -124,7 +127,13 @@ function readSubagentPolicy(file) {
   if (!document || typeof document !== 'object' || document.schemaVersion !== 1
     || typeof document.homeDir !== 'string' || !path.isAbsolute(document.homeDir)
     || !/^[a-f0-9]{64}$/.test(document.revision ?? '')
-    || !['inherit', 'force', 'blocked'].includes(document.mode)) return { state: 'conflict' };
+    || !['inherit', 'force', 'pool', 'blocked'].includes(document.mode)) return { state: 'conflict' };
+  if (document.mode === 'pool' && (document.transport !== 'native-config'
+    || typeof document.model !== 'string' || typeof document.modelAlias !== 'string'
+    || !Array.isArray(document.models) || !document.models.length || document.models.length > 32
+    || document.models.some(row => !row || typeof row.id !== 'string' || typeof row.modelAlias !== 'string'
+      || typeof row.description !== 'string' || !row.description.trim())
+    || !document.models.some(row => row.id === document.model && row.modelAlias === document.modelAlias))) return { state: 'conflict' };
   return { state: 'ok', document };
 }
 
@@ -182,6 +191,7 @@ async function serveCommand(argv, env, io, overrides = {}) {
   try {
     backend = new OpenAIBackend({ baseURL: config.upstream.baseURL, apiKey: env[config.upstream.apiKeyEnv], models: config.models });
     gateway = new KimiWorkGateway({ backend, instructionsFile: flags.instructions, recordRequests: panelEnabled });
+    if (config.subagents?.transport === 'native-config') gateway.beforeRequest = () => ({ status: 503, code: 'subagent_policy_initializing' });
   } catch (failure) {
     io.err('kimi-work-gateway: invalid config (' + failure.message + ')');
     return 2;
@@ -214,6 +224,7 @@ async function serveCommand(argv, env, io, overrides = {}) {
     try {
       policy = new (overrides.SubagentPolicy || SubagentPolicy)({ stateDir, kimiDir });
       const configured = policy.configure(config.subagents, backend.models);
+      bindNativeSubagents({ policy, gateway, stateDir, kimiDir });
       subagents = summarizeSubagentPolicy(configured);
     } catch (failure) {
       io.err('kimi-work-gateway: cannot apply the subagent policy (' + (failure?.message || String(failure)) + ')');
@@ -316,8 +327,14 @@ async function statusCommand(argv, env, io, overrides = {}) {
     io.out('subagents: ' + describeSubagentPolicy(summarizeSubagentPolicy(current.document))
       + (path.resolve(current.document.homeDir) === policy.homeDir ? '' : ' (another Kimi scope)'));
   }
-  const runtime = new (overrides.SubagentRuntime || SubagentRuntime)({ stateDir });
-  io.out('subagent runtime: ' + runtime.inspect().state);
+  if (current.state === 'ok' && current.document.transport === 'native-config') {
+    const { NativeSubagentConfig } = await import('./src/index.mjs');
+    const native = new NativeSubagentConfig({ stateDir, kimiDir }).inspect();
+    io.out('subagent runtime: ' + native.state + ' (native-config)');
+  } else {
+    const runtime = new (overrides.SubagentRuntime || SubagentRuntime)({ stateDir });
+    io.out('subagent runtime: ' + runtime.inspect().state);
+  }
   const translation = new TranslationRuntime({ stateDir, kimiDir, env }).inspect();
   io.out('translation: ' + translation.state + (translation.reason ? ' (' + translation.reason + ')' : ''));
   return 0;
@@ -342,9 +359,19 @@ async function subagentCommand(action, argv, env, io, overrides) {
     return exit;
   };
   try {
+    const selected = readSubagentPolicy(policy.file);
+    if (selected.state === 'ok' && selected.document.transport === 'native-config') {
+      if (path.resolve(selected.document.homeDir) !== policy.homeDir) return report({ state: 'scope-conflict' }, { state: 'conflict' }, 3);
+      const { NativeSubagentConfig, inspectNativeSubagentContract } = await import('./src/index.mjs');
+      const compatibility = inspectNativeSubagentContract(flags.archive ? { archive: flags.archive } : {});
+      const inspected = { ...new NativeSubagentConfig({ stateDir, kimiDir }).inspect(), compatibility };
+      if (action !== 'launch') return report(selected, inspected, compatibility.state === 'source-compatible' ? 0 : 9);
+      if (inspected.state !== 'file-applied' || compatibility.state !== 'source-compatible') throw Error('subagent_runtime_not_ready');
+      return report(selected, await runtime.launchOriginal({ protectedEnvNames: ['KIMI_WORK_UPSTREAM_KEY', 'KIMI_WORK_GATEWAY_TOKEN', 'KIMI_WORK_TRANSLATION_API_KEY'] }), 0);
+    }
     if (action === 'status') {
       // Read-only: no policy file is created here and the runtime is only inspected.
-      const current = readSubagentPolicy(policy.file);
+      const current = selected;
       const inspected = runtime.inspect();
       if (current.state === 'conflict') return report(current, inspected, 3);
       if (current.state === 'ok' && path.resolve(current.document.homeDir) !== policy.homeDir) {

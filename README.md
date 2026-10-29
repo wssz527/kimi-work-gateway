@@ -18,20 +18,20 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 
 ## 安装与首次使用
 
-需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。兼容检查依据解析器、运行时结构和实际启动能力，不以版本号白名单决定。思考翻译需 Work 渲染器确认；严格子代理控制还需桌面应用允许加载适配副本。当前正式版 Kimi 3.2.21 会忽略该副本路径，因此报告 `unsupported / packaged_bundle_override_disabled`，不能宣称强制策略已生效。Kimi Code 不适用。
+需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。兼容检查依据解析器、原生配置与运行时结构，不以版本号白名单决定。新的原生子代理池需显式启用配置同步；旧副本路径仍依赖桌面应用允许覆盖运行时，正式版 Kimi 3.2.21、3.2.22 对旧路径报告 `unsupported / packaged_bundle_override_disabled` 或明确的不兼容原因。思考翻译仍需 Work 渲染器回执。Kimi Code 不适用。
 
 ### 1. 一条命令安装
 
 macOS 终端：
 
 ```sh
-npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.4/kimi-work-gateway-0.6.4.tgz"
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.7.0/kimi-work-gateway-0.7.0.tgz"
 ```
 
 Windows PowerShell：
 
 ```powershell
-npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.4/kimi-work-gateway-0.6.4.tgz"
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.7.0/kimi-work-gateway-0.7.0.tgz"
 ```
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
@@ -95,7 +95,7 @@ kimi-work-gateway.cmd panel --config gateway.json
 - **Base URL**：`http://127.0.0.1:3426/v1`；改了网关端口则使用实际地址。
 - **Token**：面板“复制 Token”写入剪贴板的值。
 
-点“测试连接并导入模型”，回到 Work，点输入框旁的模型名即可切换。基础模型接入到此完成；强制子代理还需[准备并从适配副本启动](#子代理控制可选非官方适配)，翻译还需在[思考翻译](#思考翻译可选)页启用并从网关启动 Kimi。
+点“测试连接并导入模型”，回到 Work，点输入框旁的模型名即可切换。基础模型接入到此完成；子代理可继续在面板显式启用[原生模型池](#原生子代理模型池)，翻译需在[思考翻译](#思考翻译可选)页启用并从网关启动 Kimi。
 
 ### 日常运行、升级与移除
 
@@ -128,7 +128,7 @@ kimi-work-gateway panel --config gateway.json
 - **模型管理**：增删改模型，填写 ID、名称、上下文和输出上限，并声明工具、推理、图片输入和可用思考档位。目录保存后立即在网关生效；到 Kimi 的第三方模型网关设置重新测试并导入，才能更新它的模型菜单。当前子代理仍依赖的模型或档位不能删除，请先更换子代理目标。
 - **思考强度**：可选或填写模型已声明的档位，例如 `low`、`medium`、`high`、`xhigh`；上游有其他档位时，先在模型编辑器里填写其真实标识符，再用于子代理。不固定为低/高两档，选择自动时使用声明的默认值。
 - **视觉能力**：开启图片输入会在 Kimi 原生目录中声明 `text,image`，网关保留并转发图片内容。这是能力声明，只有上游实际支持识图才有效；本工具不为纯文本模型添加识图功能。
-- **子代理与运行时**：选择继承主模型或指定支持工具的模型。已保存目标、当前策略与运行时证据分别显示；匹配副本的进程、心跳、策略版本和目标一致后才显示采用。切换只影响后续新建子代理，主模型仍在 Kimi Work 菜单里选择。
+- **子代理与运行时**：选择继承主模型、指定模型或模型池。模型池给出多个支持工具的候选及各自用途，并在创建子代理时由主模型选择；原生模式下新建子代理可选项来自该池，`primary` 仍继承主模型。已保存目标、当前策略与运行时证据分别显示；副本模式匹配进程、心跳、策略版本和目标一致后才显示采用，原生模式则以配置文件区块与内核观测分别报告。切换只影响后续新建子代理，主模型仍在 Kimi Work 菜单里选择。
 - **连接设置**：编辑上游 Base URL、凭证的环境变量名称、监听端口与 DNS 配置。只保存变量名，密钥值继续放在启动环境。连接修改需停止并重新运行 `panel`；面板会分别显示当前运行值和已保存值，待重启期间禁止继续修改模型和子代理，防止误写。
 - **诊断与请求**：检查上游只发送一次认证的 `GET /models`；兼容检查只读本机 Kimi 目录解析器。检查通过不代表实际推理成功。概览统计本进程收到的有效认证推理请求，显示次数、失败、最近 20 条模型/协议/HTTP 结果/耗时；重启清零，不记录对话、图片、响应正文，不估算 token 或费用。Magpie 模式的用量继续在 Magpie 查看。
 - **准备、启动与 Token**：保留运行时副本准备、启动 Kimi、原生接入准备、撤销解析及服务端复制 Token。翻译关闭且子代理为继承模式时，“启动 Kimi”直接打开原版应用，不加载副本；强制子代理模式仍要求适配副本与启动契约可用，不会静默丢弃强制目标。管理员操作交给系统授权；已运行 Kimi 时提示先正常退出，不结束进程、不自动重试。Token 值不会发给页面。
@@ -142,7 +142,7 @@ kimi-work-gateway panel --config gateway.json
 | `GET /api/state` | 状态、模型、子代理、连接、翻译设置与真实会话状态、请求统计及诊断摘要；不含密钥值 |
 | `POST /api/models` | `{revision, models}`，完整模型目录；成功返回 `{ok:true,state}` 并立即应用 |
 | `POST /api/connection` | `{revision, upstream:{baseURL,apiKeyEnv}, tokenEnv, port, dns:{enabled,port}}`；成功返回 `{ok:true,state}`，连接等重启后应用 |
-| `POST /api/subagents` | `{revision,mode,model?,effort?}`；成功返回 `{ok:true,state}` |
+| `POST /api/subagents` | `{revision,mode,model,effort?,transport?}` 或 `{revision,mode:'pool',model,transport:'native-config',models:[{id,description}]}`；成功返回 `{ok:true,state}`。`transport` 仅接受 `native-config`，`pool` 固定使用它 |
 | `POST /api/translation` | `{revision,...translation}`，完整翻译设置；成功返回 `{ok:true,state}`，已有宿主异步应用并回报状态 |
 | `POST /api/actions` | `{id,at,action}`；202 返回 `{ok:true,operation}`，轮询状态确认结果；支持 `check-upstream`、`check-compat`、`check-translation`、`launch-translated-kimi` |
 
@@ -227,13 +227,66 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 | `subagents-status` | 只读报告子代理策略与运行时状态 |
 | `subagents-launch` | 用适配后的运行时副本启动 Kimi；需先退出 Kimi |
 
-`serve` 不会申请管理员权限，也不会改 Kimi 自己的配置。状态文件包含进程与实例标识、URL、模型数量、DNS 模式与生效的子代理策略，不含 Key 或对话内容；退出时只清理仍归本实例所有的状态。
+`serve` 不会申请管理员权限。显式启用原生子代理同步后，它会管理下文所述私有 TOML 区块；默认不写 Kimi 模型配置。状态文件包含进程与实例标识、URL、模型数量、DNS 模式与子代理策略，不含 Key 或对话内容；退出时只清理仍归本实例所有的状态。
+
+## 原生子代理模型池
+
+在面板的 **子代理** 页显式启用原生配置同步，可选择继承主模型、固定一个子模型，或配置模型池。也可在 `gateway.json` 设置：
+
+```json
+{
+  "subagents": {
+    "mode": "pool",
+    "transport": "native-config",
+    "model": "deepseek-v4-1-flash",
+    "models": [
+      { "id": "deepseek-v4-1-flash", "description": "代码实现和排查" },
+      { "id": "glm-5-3-flash", "description": "独立审查和交叉验证" }
+    ]
+  }
+}
+```
+
+这些 ID 必须已在网关目录声明，并在 Kimi 导入。池内可选 1–32 个支持工具调用的模型，默认模型须在池中；用途说明为单行文本，最长 1000 字符。模型池使用各模型自己的默认思考档位。固定模型可设置 `mode: "force"`、`transport: "native-config"`、`model` 及可选 `effort`；继承模式使用 `mode: "inherit"` 和同一 transport。
+
+这条路径不依赖 `DAIMON_BUNDLE_DIR`，不修改安装文件。网关在运行期间管理 Kimi 私有 `runtime/kimi-code/home/config.toml` 中带归属标记的 `secondary_model` 区块；桌面重新生成配置后会重新同步。已有未受管的子代理配置、用户改过的受管区块或文件归属冲突均不会被覆盖。关闭前切回继承并确认撤销状态，再停止或卸载网关。
+
+| 状态 | 可以确认什么 |
+| --- | --- |
+| `source-compatible` | 安装内核的配置、监听和模型选择结构匹配；不代表实际请求已采用 |
+| `file-applied` | 区块已写入私有配置；固定模型模式不据此声称已运行 |
+| `observed.state: observed-schema` | Work 请求中的子代理工具已包含预期模型池和默认模型 |
+| `waiting-config` | 模型尚未导入或私有配置尚未生成 |
+| `conflict` / `unverified` | 无法安全同步或确认安装结构，需查看原因 |
+
+模型池未出现在 Work 的工具定义中时，网关返回可重试的 `subagent_native_reload_pending`，不向上游转发旧定义。设置只作用于新建的普通子代理；`primary` 显式继承主模型和档位，`fork` 继承父会话，恢复旧子代理保留其原有模型。原生配置路径沿用 Kimi 自己的这些行为，与下文旧副本的严格守卫不同。plan、coder、explore 的类型决定工具权限，用途说明不构成按类型强制绑定。AgentSwarm、TowerSpawn 在 Work 实际启用这些功能时共用该池，本工具不解锁会员功能或开启隐藏功能。
+
+旧配置不自动启用原生同步；现有无 transport 的 force 配置继续走旧副本路径。兼容检查依据安装内容，不固定版本号；结构变化时报告未验证。原生池已在未修改的 Kimi 3.2.21 与 3.2.22 内核上、经本地模拟网关实际调用子模型；Windows 真机仍需实测。
+
+## Work 各功能的模型来源
+
+| 功能 | 模型或服务来源 | 第三方接入边界 |
+| --- | --- | --- |
+| 主会话、规划、工具推理 | 当前会话模型 | 使用 Work 导入的第三方模型 |
+| 压缩、上下文摘要 | 当前会话模型 | 随主模型切换，没有独立摘要模型选项 |
+| 普通子代理、各 Agent 类型 | 原生 secondary_model 池或继承 | 可使用上述池；类型与模型选择分开 |
+| Swarm / Tower 工作器 | 同一子代理模型池 | 只有宿主实际开放功能时可用 |
+| 图片理解 | 当前模型的真实图片能力 | 目录需声明图片输入；不为文本模型增加视觉能力，未接入视频服务 |
+| 定时任务 | 调度器本身无模型，触发后的任务使用会话模型 | 第三方会话模型可承接推理；仍受宿主调度和会话生命周期限制 |
+| 会话标题 | Kimi 专用 chat_title 服务与账号鉴权 | 不通过本聊天模型网关；不提供第三方标题生成 |
+| 长期记忆 | Kimi Memory Space 服务 | 仍由 Kimi 账号与工具设置管理 |
+| 网页搜索、抓取 | 独立工具服务 | 聊天模型不能直接替代；兼容搜索服务可由原生 services 配置提供，但本工具未管理该配置 |
+| 生图、宠物渲染 | 独立媒体服务 | 不随聊天模型选择切换，未提供第三方生图设置 |
+| 语音听写 | 腾讯云 ASR，经 Kimi 获取凭证 | 不随聊天模型选择切换，未提供第三方 ASR 设置 |
+| 思考翻译 | 本网关独立翻译设置 | 可使用自定义 Chat Completions，见上文 |
+
+这份边界来自对本机 Work 3.2.21 与 3.2.22 调用路径的检查；服务端实现与未来应用版本可能变化。代码中存在某个供应商 SDK，不等于该功能已经开放给用户。
 
 ## 子代理控制（可选，非官方适配）
 
-默认情况下 Work 里的子代理沿用主模型。如果希望子代理固定走另一个模型，本工具提供一条**内部、非官方**的适配路径：
+本节是保留的旧副本接入，仅适用于允许覆盖运行时路径的桌面构建。默认情况下 Work 里的子代理沿用主模型。如果希望使用旧版严格守卫，本工具保留该**内部、非官方**路径：
 
-- `subagents-launch` 为本次进程设置 `DAIMON_BUNDLE_DIR`，指向本地适配副本。准备前会执行正式应用的启动接口探针；应用忽略该变量时直接报告 `unsupported`。**当前正式版 Kimi 3.2.21 属于此情况，以下流程需启动能力检查通过后才可使用。** 不自动迁移为原生 TOML 配置，避免放松 fork/resume 的严格约束。
+- `subagents-launch` 为本次进程设置 `DAIMON_BUNDLE_DIR`，指向本地适配副本。准备前会执行正式应用的启动接口探针；应用忽略该变量时直接报告 `unsupported`。**当前正式版 Kimi 3.2.21、3.2.22 属于此情况，以下流程需启动能力检查通过后才可使用。** 不自动迁移为原生 TOML 配置，避免放松 fork/resume 的严格约束。
 - 内核按配置读取、依赖注入、子代理创建与恢复结构定位，并用真实内核行为回归和生成代码语法检查验证守卫。未知版本可通过这些检查；无法确认结构和行为时拒绝准备。`serve` 负责策略和转发，不修改 Kimi 安装目录、`app.asar`、可执行文件或签名。
 - 主模型仍由 Work 菜单选择；这里只影响子代理。
 
@@ -313,7 +366,7 @@ kimi-work-gateway compat
 
 1. 先在 Kimi 自己的“第三方模型网关”设置里断开连接。
 2. 运行 `remove-dns` 并完成授权。
-3. 停止 `serve`（若用过子代理控制，这一步同时把策略恢复为 `inherit`）。
+3. 停止 `serve`（没用过原生子代理池时，这一步同时把策略恢复为 `inherit`）。若用过模型池，面板或 `subagents-status` 显示 `restored` 才算撤销成功；显示 `conflict` 说明本机 `config.toml` 中的受管区块被手工改过或 receipt 丢失，工具不会覆盖它，需按提示人工处理后再断开。`close` 失败不会影响 Kimi 正常启动，但请勿把残留区块当作仍在生效的池。
 
 只删除内容仍与本工具配置一致的 `/etc/resolver/dev.msh.team`（macOS），或只删除带本工具标记的那两行（Windows），不删除别人的解析文件或条目，不改全局 DNS、代理、证书或防火墙。停止 `serve` 后 HTTP 监听消失，不安装常驻服务。删除状态目录里的 `native-runtime/` 即可移除适配后的运行时副本；这不影响 Kimi 安装目录，也不影响 Work 的正常启动。
 
@@ -341,7 +394,7 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 - 首次接入需要管理员授权（macOS resolver / Windows hosts）。准备只有在操作完成且验证成功后才记为 `done`；裁决缺失会记为失败。
 - Windows prepare 可使用已存在的手工同值条目，撤销时保留该条目；只删除标记与内容完整匹配的归属条目对。BOM、原换行和无末尾换行的内容保留；不支持的编码拒绝改写。
 - 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
-- 子代理控制是内部、非官方适配，按结构与实际启动能力检查；当前正式版 Kimi 3.2.21 不允许该副本加载路径。跨版本合成检查不保证所有未来版本可用。
+- 子代理控制是内部、非官方适配，按结构与实际启动能力检查；当前正式版 Kimi 3.2.21、3.2.22 不允许该副本加载路径。跨版本合成检查不保证所有未来版本可用。
 - Windows 真机已验证 CLI、Node/HTTP 流程及临时 hosts 文件的实际 PowerShell 编辑，并在官方普通 Kimi 3.2.21 的隔离用户目录中验证私有 CDP 管道与 Work 渲染器挂载。**真实 UAC、真实 hosts 修改与登录后的完整 Work 桌面流程仍未联合验收**；分层结果以发行说明为准。
 - 原生内核回归与翻译界面测试使用隔离目录、合成文本及本地模拟上游，覆盖模型绑定、恢复、坏策略和译文生命周期。它们不产生付费推理，也不能代替登录桌面后的整条调用链验证。
 
