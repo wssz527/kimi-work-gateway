@@ -555,7 +555,9 @@ describe('filesystem safety', () => {
     expect(serialized).not.toContain('api_key');
     expect(serialized).not.toContain(SECRET);
     expect(serialized).not.toContain(instance.stateDir);
-    expect(fs.statSync(path.join(stateDir, NATIVE_SUBAGENT_RECEIPT)).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(path.join(stateDir, NATIVE_SUBAGENT_RECEIPT)).mode & 0o777).toBe(0o600);
+    }
   });
 
   test('results carry only a state, a transport and a short reason', () => {
@@ -589,7 +591,10 @@ describe('filesystem safety', () => {
     const stat = fs.lstatSync(configPath);
     expect(stat.isFile()).toBe(true);
     expect(stat.isSymbolicLink()).toBe(false);
-    expect(stat.mode & 0o777).toBe(0o644);
+    // NTFS has no POSIX permission bits: chmod is a no-op there and the mask
+    // only reflects read-only. The byte-preserving check makes sense only on
+    // filesystems that actually store the mode.
+    if (process.platform !== 'win32') expect(stat.mode & 0o777).toBe(0o644);
     expect(fs.readdirSync(path.dirname(configPath)).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 });
