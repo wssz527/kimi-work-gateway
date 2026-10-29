@@ -463,7 +463,7 @@ export function inspectArchive(file, { models = probeModels() } = {}) {
 
 export function archiveCandidates({ platform = process.platform, env = process.env } = {}) {
   if (platform === 'darwin') return [DEFAULT_ARCHIVE,
-    path.join(env.HOME || os.homedir(), 'Applications', 'Kimi.app', 'Contents', 'Resources', 'app.asar')];
+    path.posix.join(env.HOME || os.homedir(), 'Applications', 'Kimi.app', 'Contents', 'Resources', 'app.asar')];
   if (platform !== 'win32') return [];
   const local = env.LOCALAPPDATA || (env.USERPROFILE ? path.win32.join(env.USERPROFILE, 'AppData', 'Local') : null);
   const roots = [local && path.win32.join(local, 'Programs'), local,

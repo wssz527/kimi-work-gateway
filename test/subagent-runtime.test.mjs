@@ -9,6 +9,7 @@ import { structuralKernel } from './fixtures/structural-kernel.mjs';
 
 const roots = [];
 const relativeKernel = 'app/daimon/dist/kimi-code-v2/kernel-bundle.mjs';
+const environmentValue = (env, name) => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1];
 function fixture(capability = { state: 'supported' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kwg-runtime-contract-')); roots.push(root);
   const stateDir = path.join(root, 'state');
@@ -64,7 +65,7 @@ test('original launch works without launch capability or a prepared copy and str
     expect(launched.application).toBe(f.installation.application);
     expect(launched.env.DAIMON_BUNDLE_DIR).toBeUndefined();
     expect(launched.env.KWG_RUNTIME_PRIVATE_TEST).toBeUndefined();
-    expect(launched.env.PATH).toBe(process.env.PATH);
+    expect(environmentValue(launched.env, 'PATH')).toBe(process.env.PATH);
     expect(fs.existsSync(f.runtime.manifestFile)).toBe(false);
   } finally {
     if (previousBundle === undefined) delete process.env.DAIMON_BUNDLE_DIR; else process.env.DAIMON_BUNDLE_DIR = previousBundle;
@@ -111,7 +112,7 @@ test('missing policies fail with a stable reason and child environments retain s
       } });
     expect(result.state).toBe('starting');
     expect(env.KWG_RUNTIME_PRIVATE_TEST).toBeUndefined();
-    expect(env.PATH).toBe(process.env.PATH);
+    expect(environmentValue(env, 'PATH')).toBe(process.env.PATH);
     expect(env.DAIMON_BUNDLE_DIR).toBe(readSubagentJSON(f.runtime.manifestFile).bundleDir);
     expect(process.env.KWG_RUNTIME_PRIVATE_TEST).toBe('host-only');
   } finally {
