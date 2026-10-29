@@ -24,6 +24,11 @@ export const GATEWAY_LATEST_RELEASE_URL = 'https://api.github.com/repos/' + GATE
 export const GATEWAY_RELEASE_DOWNLOAD_ROOT = 'https://github.com/' + GATEWAY_REPOSITORY + '/releases/download';
 export const GATEWAY_RELEASE_PAGE_ROOT = 'https://github.com/' + GATEWAY_REPOSITORY + '/releases/tag';
 export const GATEWAY_GIT_URL = 'https://github.com/' + GATEWAY_REPOSITORY;
+// GitHub serves each repository's releases as a static Atom feed. It is a
+// plain file, so it is neither rate limited nor tied to an account: the same
+// anonymous request works for every user, on every platform, with or without
+// git installed.
+export const GATEWAY_RELEASES_FEED_URL = 'https://github.com/' + GATEWAY_REPOSITORY + '/releases.atom';
 
 const ACTIVE_SCHEMA = 1;
 const RELEASE_SCHEMA = 1;
@@ -34,6 +39,7 @@ const MAX_ACTIVE_BYTES = 256 * 1024;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SHA256SUMS_BYTES = 64 * 1024;
 const MAX_RELEASE_JSON_BYTES = 1024 * 1024;
+const MAX_RELEASE_FEED_BYTES = 1024 * 1024;
 const REDIRECT_LIMIT = 4;
 const USER_AGENT = 'kimi-work-gateway-updater/1';
 const ASSET_REDIRECT_SUFFIX = '.githubusercontent.com';
@@ -573,8 +579,11 @@ function extractArchive(file, destination) {
 // --- HTTP -------------------------------------------------------------------
 
 function requestHeaders(kind) {
+  const accept = kind === 'api' ? 'application/vnd.github+json'
+    : kind === 'feed' ? 'application/atom+xml, application/xml;q=0.9, */*;q=0.8'
+      : 'application/octet-stream';
   const headers = {
-    accept: kind === 'api' ? 'application/vnd.github+json' : 'application/octet-stream',
+    accept,
     'accept-encoding': 'identity',
     'user-agent': USER_AGENT,
   };
@@ -650,6 +659,23 @@ function latestTagsViaGit({ timeoutMs, gitPath }) {
     throw updateError('update_git_unavailable');
   }
   return stableTagsFromRefs(output);
+}
+
+// The feed lists published releases only, newest first, which is exactly what
+// the API's "latest release" answers. Parse the entry ids rather than trusting
+// order, and keep the same stable-only rule as the git path.
+export function stableTagsFromFeed(text) {
+  if (typeof text !== 'string') throw updateError('update_release_invalid');
+  const versions = new Map();
+  for (const match of text.matchAll(/<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/g)) {
+    let tag = match[1].trim();
+    if (tag.endsWith('^{}')) tag = tag.slice(0, -3);
+    const version = tag.startsWith('v') ? tag.slice(1) : tag;
+    if (!SEMVER_PATTERN.test(version)) continue;
+    versions.set(version, 'v' + version);
+  }
+  return [...versions.keys()].sort((left, right) => compareVersions(right, left))
+    .map(version => ({ version, tag: versions.get(version) }));
 }
 
 function validateDownloadURL(value, tag, assetName) {
@@ -1009,6 +1035,8 @@ export class GatewayUpdater {
   async loadRelease() {
     const discovered = await this.discoverViaGit();
     if (discovered) return discovered;
+    const fed = await this.discoverViaFeed();
+    if (fed) return fed;
     return this.loadReleaseViaAPI();
   }
 
@@ -1026,6 +1054,28 @@ export class GatewayUpdater {
       return null;
     }
     if (!Array.isArray(candidates) || candidates.length === 0) return null;
+    return this.pickRelease(candidates, 'git');
+  }
+
+  // Without git (a stock Windows install, for example), the static releases
+  // feed answers the same question and, being a plain file rather than an API
+  // call, costs nothing from anyone's rate limit.
+  async discoverViaFeed() {
+    let body;
+    try {
+      const session = await this.openResponse(new URL(GATEWAY_RELEASES_FEED_URL), 'feed', MAX_RELEASE_FEED_BYTES);
+      body = await this.readResponse(session, MAX_RELEASE_FEED_BYTES, 'update_response_too_large');
+    } catch {
+      return null;
+    }
+    let candidates;
+    try { candidates = stableTagsFromFeed(body.toString('utf8')); }
+    catch { return null; }
+    if (candidates.length === 0) return null;
+    return this.pickRelease(candidates, 'feed');
+  }
+
+  async pickRelease(candidates, source) {
     const effective = this.effectiveVersion(this.readActiveOrNull());
     let lastReason = null;
     for (const candidate of candidates.slice(0, 5)) {
@@ -1043,8 +1093,8 @@ export class GatewayUpdater {
         lastReason = reasonOf(error);
       }
     }
-    // git answered but no candidate had a usable archive: that is a real
-    // failure, not a reason to fall back to the rate-limited API.
+    // The discovery source answered but no candidate had a usable archive:
+    // that is a real failure, not a reason to fall back to the API.
     throw updateError(lastReason ?? 'update_release_not_found');
   }
 
@@ -1093,6 +1143,14 @@ export class GatewayUpdater {
       if (url.hostname !== 'api.github.com') throw updateError('update_release_invalid');
       return;
     }
+    if (kind === 'feed') {
+      // The feed is one fixed static file; never follow it elsewhere.
+      const expected = new URL(GATEWAY_RELEASES_FEED_URL).pathname;
+      if (url.hostname !== 'github.com' || url.pathname !== expected) {
+        throw updateError('update_release_invalid');
+      }
+      return;
+    }
     if (url.hostname === 'github.com' || url.hostname.endsWith(ASSET_REDIRECT_SUFFIX)) return;
     throw updateError('update_release_asset_invalid');
   }
@@ -1132,6 +1190,9 @@ export class GatewayUpdater {
         }
         if (kind === 'api') {
           if (next.hostname !== 'api.github.com') throw updateError('update_redirect_rejected');
+        } else if (kind === 'feed') {
+          // A feed is served in place; any hop is a redirect to somewhere else.
+          throw updateError('update_redirect_rejected');
         } else if (next.hostname !== 'github.com' && !next.hostname.endsWith(ASSET_REDIRECT_SUFFIX)) {
           throw updateError('update_redirect_rejected');
         }
@@ -1145,7 +1206,7 @@ export class GatewayUpdater {
       // GitHub answers JSON. Reject an HTML login or error page that happens to
       // answer 200, but do not require the header: a plain text answer is
       // parsed below and rejected there if it is not JSON.
-      if (kind === 'api') {
+      if (kind === 'api' || kind === 'feed') {
         let type = '';
         try { type = (response.headers.get('content-type') || '').toLowerCase(); } catch {}
         if (type.includes('text/html') || type.includes('application/xhtml')) {

@@ -8,11 +8,22 @@ import { execFileSync } from 'node:child_process';
 import { defaultStateDirectory } from '../src/paths.mjs';
 import {
   GatewayUpdater, gatewayPackageTreeDigest, gatewayUpdateDirectory, inspectGatewayPackage,
-  stableTagsFromRefs,
+  stableTagsFromRefs, stableTagsFromFeed,
 } from '../src/update-manager.mjs';
 
 const API_URL = 'https://api.github.com/repos/wssz527/kimi-work-gateway/releases/latest';
 const DOWNLOAD = 'https://github.com/wssz527/kimi-work-gateway/releases/download';
+const FEED_URL = 'https://github.com/wssz527/kimi-work-gateway/releases.atom';
+
+function feedXML(tags) {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">\n'
+    + tags.map(tag => '  <entry>\n'
+      + '    <id>tag:github.com,2008:Repository/1434790774/' + tag + '</id>\n'
+      + '    <link rel="alternate" type="text/html" href="https://github.com/wssz527/kimi-work-gateway/releases/tag/' + tag + '"/>\n'
+      + '    <title>' + tag + '</title>\n'
+      + '  </entry>\n').join('')
+    + '</feed>\n';
+}
 
 function workspace() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'kwg-update-'));
@@ -130,7 +141,7 @@ function releaseJSON({ version = '0.6.0', asset, size, digest, sums, tag } = {})
   };
 }
 
-function mockFetch({ release, asset, sums, apiStatus = 200, assetStatus = 200, override } = {}) {
+function mockFetch({ release, asset, sums, apiStatus = 200, assetStatus = 200, feed, override } = {}) {
   const calls = [];
   const impl = async (url, init) => {
     const value = String(url);
@@ -138,6 +149,12 @@ function mockFetch({ release, asset, sums, apiStatus = 200, assetStatus = 200, o
     if (typeof override === 'function') {
       const replaced = await override(value, init);
       if (replaced !== undefined) return replaced;
+    }
+    if (value === FEED_URL) {
+      // Only cases that opt in get a feed; the rest exercise the API fallback.
+      return feed === undefined
+        ? new Response('not found', { status: 404 })
+        : new Response(feed, { status: 200, headers: { 'content-type': 'application/atom+xml' } });
     }
     if (value === API_URL) {
       if (apiStatus !== 200) return new Response('{"message":"denied"}', { status: apiStatus });
@@ -162,7 +179,7 @@ function updaterFor(work, { release, asset, sums, packageRoot, currentVersion = 
     currentVersion,
     env: {},
     fetchImpl: mockFetch({ release, asset, sums, ...options }),
-    // No git by default: these cases exercise the API fallback path.
+    // No git by default: these cases exercise the discovery fallbacks.
     gitImpl: options.gitImpl ?? (() => []),
     ...options,
   });
@@ -222,8 +239,9 @@ test('check reads only the fixed stable release and never sends credentials', as
       releaseURL: 'https://github.com/wssz527/kimi-work-gateway/releases/tag/v0.6.0',
     });
     expect(Number.isFinite(Date.parse(state.checkedAt))).toBe(true);
-    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([API_URL]);
-    const init = updater.fetchImpl.calls[0].init;
+    // No git, no feed: the discovery falls through to the API.
+    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([FEED_URL, API_URL]);
+    const init = updater.fetchImpl.calls[1].init;
     expect(init.redirect).toBe('manual');
     expect(init.credentials).toBe('omit');
     const names = Object.keys(init.headers).map(name => name.toLowerCase());
@@ -243,6 +261,7 @@ test('install downloads with the same credential-free request options as check',
     const updater = updaterFor(work, { release, asset });
     expect((await updater.install()).state).toBe('staged');
     expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([
+      FEED_URL,
       API_URL,
       DOWNLOAD + '/v0.6.0/kimi-work-gateway-0.6.0.tgz',
     ]);
@@ -917,7 +936,7 @@ test('when git is unavailable the API is still tried as a fallback', async () =>
     const updater = updaterFor(work, { release, asset, gitImpl: () => { throw new Error('git missing'); } });
     const state = await updater.check();
     expect(state).toMatchObject({ state: 'available', latestVersion: '0.6.0' });
-    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([API_URL]);
+    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([FEED_URL, API_URL]);
   } finally { work.cleanup(); }
 });
 
@@ -969,4 +988,94 @@ test('git tag listing keeps only stable semver tags, newest first', () => {
   ]);
   expect(stableTagsFromRefs('')).toEqual([]);
   expect(() => stableTagsFromRefs(null)).toThrow('update_git_unavailable');
+});
+
+// --- static feed discovery (no git, no API) --------------------------------
+
+test('without git the static releases feed finds the newest stable release', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work);
+    const sums = crypto.createHash('sha256').update(asset).digest('hex') + '  kimi-work-gateway-0.6.0.tgz\n';
+    const updater = updaterFor(work, { asset, sums, feed: feedXML(['v0.6.0', 'v0.5.0']) });
+    const state = await updater.check();
+    expect(state).toMatchObject({ state: 'available', latestVersion: '0.6.0' });
+    // The feed replaces the API entirely: only the static checksum is fetched.
+    expect(updater.fetchImpl.calls.map(call => call.url))
+      .toEqual([FEED_URL, DOWNLOAD + '/v0.6.0/SHA256SUMS']);
+    expect((await updater.install()).state).toBe('staged');
+  } finally { work.cleanup(); }
+});
+
+test('the feed path never spends the GitHub API quota', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work);
+    const sums = crypto.createHash('sha256').update(asset).digest('hex') + '  kimi-work-gateway-0.6.0.tgz\n';
+    const updater = updaterFor(work, { asset, sums, feed: feedXML(['v0.6.0']), apiStatus: 403 });
+    const state = await updater.check();
+    expect(state.state).toBe('available');
+    expect(updater.fetchImpl.calls.some(call => call.url === API_URL)).toBe(false);
+  } finally { work.cleanup(); }
+});
+
+test('the feed keeps only stable versions and ignores pre-releases', () => {
+  const text = feedXML(['v0.6.0', 'v0.7.0-rc.1', 'nightly', 'v0.10.1', 'v0.9.0']);
+  expect(stableTagsFromFeed(text)).toEqual([
+    { version: '0.10.1', tag: 'v0.10.1' },
+    { version: '0.9.0', tag: 'v0.9.0' },
+    { version: '0.6.0', tag: 'v0.6.0' },
+  ]);
+  expect(stableTagsFromFeed(feedXML([]))).toEqual([]);
+  expect(() => stableTagsFromFeed(null)).toThrow('update_release_invalid');
+});
+
+test('an unreadable feed falls through to the API instead of failing', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset, release } = releaseFor(work);
+    const updater = updaterFor(work, {
+      release, asset,
+      override: async url => (url === FEED_URL ? new Response('<html>login</html>',
+        { status: 200, headers: { 'content-type': 'text/html' } }) : undefined),
+    });
+    const state = await updater.check();
+    expect(state).toMatchObject({ state: 'available', latestVersion: '0.6.0' });
+    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([FEED_URL, API_URL]);
+  } finally { work.cleanup(); }
+});
+
+test('a feed answer with no usable release fails rather than trusting the API', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work);
+    const updater = updaterFor(work, { asset, feed: feedXML(['v0.6.0']) });
+    const state = await updater.check();
+    expect(state.state).toBe('failed');
+    expect(state.reason).toBe('update_release_not_found');
+    expect(updater.fetchImpl.calls.map(call => call.url))
+      .toEqual([FEED_URL, DOWNLOAD + '/v0.6.0/SHA256SUMS']);
+  } finally { work.cleanup(); }
+});
+
+test('the feed request is fixed to one static path and rejects any redirect', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset, release } = releaseFor(work);
+    const updater = updaterFor(work, {
+      release, asset,
+      override: async url => (url === FEED_URL
+        ? new Response(null, { status: 302, headers: { location: 'https://evil.example/feed' } })
+        : undefined),
+    });
+    const state = await updater.check();
+    // A hijacked feed must not be followed; the API answer still stands.
+    expect(state).toMatchObject({ state: 'available', latestVersion: '0.6.0' });
+    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([FEED_URL, API_URL]);
+  } finally { work.cleanup(); }
 });

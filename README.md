@@ -25,13 +25,13 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 macOS 终端：
 
 ```sh
-npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.1/kimi-work-gateway-0.6.1.tgz"
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.2/kimi-work-gateway-0.6.2.tgz"
 ```
 
 Windows PowerShell：
 
 ```powershell
-npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.1/kimi-work-gateway-0.6.1.tgz"
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.6.2/kimi-work-gateway-0.6.2.tgz"
 ```
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
@@ -190,7 +190,7 @@ kimi-work-gateway rollback-update
 
 Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 API Key，也不修改模型配置或 Kimi 设置；旧版没有更新命令，需先按安装命令升级到 v0.6.0 一次。
 
-更新来自 `wssz527/kimi-work-gateway` 的 GitHub 稳定 Release。优先用本机 `git ls-remote` 发现最新稳定标签，再按标签读取同一次发行的 `SHA256SUMS` 确认安装包存在并取得摘要；这一步只访问 `github.com` 的静态发行文件，不受 GitHub API 匿名限流影响。本机没有 Git（例如部分 Windows 环境）时，退回 GitHub API 查询最新发行。下载、归档路径和 SHA-256 校验成功后才切换用户状态目录中的程序版本，保留上一版本供回退；网络错误、限流或校验失败会保留当前版本。更新与回退均在**下次启动网关**时生效，当前进程不会自动重启，也不会结束 Kimi。重启时继续使用原来的配置路径和环境变量。没有新版本时无需更新，不会强制降级。
+更新来自 `wssz527/kimi-work-gateway` 的 GitHub 稳定 Release。发现最新稳定版本依次尝试三条路径：本机 `git ls-remote`、仓库的静态发行 feed（`releases.atom`）、最后才是 GitHub API。前两条都是匿名的静态文件读取，不需要账号、不需要 Git，也不消耗任何人的 API 配额；只有前两条都不可用时才调用 API，而那时使用的是**运行者本机 IP 自己的**匿名配额，与项目作者无关。拿到标签后仍按该标签读取 `SHA256SUMS`，确认安装包存在并取得摘要。下载、归档路径和 SHA-256 校验成功后才切换用户状态目录中的程序版本，保留上一版本供回退；网络错误、限流或校验失败会保留当前版本。更新与回退均在**下次启动网关**时生效，当前进程不会自动重启，也不会结束 Kimi。重启时继续使用原来的配置路径和环境变量。没有新版本时无需更新，不会强制降级。
 
 更新状态通过 `GET /api/state` 的 `updates` 返回：`currentVersion` 是当前运行版本，`latestVersion` 是上次检查的稳定版，`pendingVersion` 是下次启动采用的版本，`rollbackVersion` 是可回退版本。`state` 为 `not-checked`、`checking`、`current`、`available`、`staged` 或 `failed`，另有可选 `checkedAt`、`releaseURL` 和 `reason`。面板操作仍经带 ID 去重的 `POST /api/actions`，新增 `check-update`、`install-update`、`rollback-update`。
 
