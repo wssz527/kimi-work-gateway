@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { defaultStateDirectory } from '../src/paths.mjs';
 import {
   GatewayUpdater, gatewayPackageTreeDigest, gatewayUpdateDirectory, inspectGatewayPackage,
+  stableTagsFromRefs,
 } from '../src/update-manager.mjs';
 
 const API_URL = 'https://api.github.com/repos/wssz527/kimi-work-gateway/releases/latest';
@@ -161,6 +162,8 @@ function updaterFor(work, { release, asset, sums, packageRoot, currentVersion = 
     currentVersion,
     env: {},
     fetchImpl: mockFetch({ release, asset, sums, ...options }),
+    // No git by default: these cases exercise the API fallback path.
+    gitImpl: options.gitImpl ?? (() => []),
     ...options,
   });
 }
@@ -364,6 +367,7 @@ test('a request that never answers times out instead of hanging', async () => {
       env: {},
       timeoutMs: 50,
       fetchImpl: () => new Promise(() => {}),
+      gitImpl: () => [],
     });
     const state = await updater.check();
     expect(state.state).toBe('failed');
@@ -561,6 +565,7 @@ test('an archive that decompresses past the limit is refused as too large', asyn
       packageRoot: work.file('base', 'package'),
       currentVersion: '0.5.0',
       env: {},
+      gitImpl: () => [],
       maxAssetBytes: 8 * 1024 * 1024,
       maxUnpackedBytes: 512 * 1024,
       fetchImpl: mockFetch({ release: releaseJSON({ asset }), asset }),
@@ -582,6 +587,7 @@ test('an asset larger than the configured limit is refused from release metadata
       packageRoot: work.file('base', 'package'),
       currentVersion: '0.5.0',
       env: {},
+      gitImpl: () => [],
       maxAssetBytes: 16,
       fetchImpl: mockFetch({ release: releaseJSON({ asset }), asset }),
     });
@@ -687,6 +693,7 @@ test('a held lock blocks an install until its timeout and changes nothing', asyn
       packageRoot: work.file('base', 'package'),
       currentVersion: '0.5.0',
       env: {},
+      gitImpl: () => [],
       lockTimeoutMs: 120,
       fetchImpl: mockFetch({ release: releaseJSON({ asset }), asset }),
     });
@@ -712,6 +719,7 @@ test('a stale lock is reclaimed instead of blocking updates forever', async () =
       packageRoot: work.file('base', 'package'),
       currentVersion: '0.5.0',
       env: {},
+      gitImpl: () => [],
       lockTimeoutMs: 1000,
       lockStaleMs: 60_000,
       fetchImpl: mockFetch({ release: releaseJSON({ asset }), asset }),
@@ -763,6 +771,7 @@ test('rollback uses KIMI_WORK_GATEWAY_BOOTSTRAP_ROOT as the baseline for a manag
       currentVersion: '0.5.0',
       env: { KIMI_WORK_GATEWAY_BOOTSTRAP_ROOT: original },
       fetchImpl: mockFetch({ release: releaseJSON({ asset }), asset }),
+      gitImpl: () => [],
     });
     expect((await updater.install()).state).toBe('staged');
     expect(readActive(work).rollback).toMatchObject({ source: 'baseline', root: original });
@@ -816,4 +825,148 @@ test('package trees are hashed deterministically and symlinks are refused', () =
     expect(inspectGatewayPackage(root, { version: '0.6.0' }).tree.sha256).toBe(first.sha256);
     expect(() => inspectGatewayPackage(root, { version: '0.7.0' })).toThrow('update_package_invalid');
   } finally { work.cleanup(); }
+});
+
+// --- git discovery ---------------------------------------------------------
+
+function refs(versions) {
+  return versions.map((version, index) => (
+    (String(index + 1).repeat(40)) + '\trefs/tags/v' + version
+  )).join('\n') + '\n';
+}
+
+test('git discovers the newest stable tag and never touches the GitHub API', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work);
+    const sums = crypto.createHash('sha256').update(asset).digest('hex') + '  kimi-work-gateway-0.6.0.tgz\n';
+    const updater = updaterFor(work, {
+      asset, sums,
+      gitImpl: () => [
+        { version: '0.6.0', tag: 'v0.6.0' },
+        { version: '0.5.0', tag: 'v0.5.0' },
+      ],
+    });
+    const state = await updater.check();
+    expect(state).toMatchObject({ state: 'available', latestVersion: '0.6.0' });
+    // Only the static checksum file is fetched; no api.github.com request.
+    expect(updater.fetchImpl.calls.map(call => call.url))
+      .toEqual([DOWNLOAD + '/v0.6.0/SHA256SUMS']);
+    expect((await updater.install()).state).toBe('staged');
+    expect(readActive(work).current).toMatchObject({ version: '0.6.0', sha256: crypto.createHash('sha256').update(asset).digest('hex') });
+  } finally { work.cleanup(); }
+});
+
+test('git skips tags whose release archive was never published', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work, '0.6.0');
+    const sums = crypto.createHash('sha256').update(asset).digest('hex') + '  kimi-work-gateway-0.6.0.tgz\n';
+    const updater = updaterFor(work, {
+      asset, sums,
+      gitImpl: () => [
+        { version: '0.7.0', tag: 'v0.7.0' },
+        { version: '0.6.0', tag: 'v0.6.0' },
+      ],
+      override: async url => (url.endsWith('/v0.7.0/SHA256SUMS') ? new Response('missing', { status: 404 }) : undefined),
+    });
+    const state = await updater.check();
+    expect(state).toMatchObject({ state: 'available', latestVersion: '0.6.0' });
+  } finally { work.cleanup(); }
+});
+
+test('git skips versions that are not newer than what is installed', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work, '0.6.0');
+    const sums = crypto.createHash('sha256').update(asset).digest('hex') + '  kimi-work-gateway-0.6.0.tgz\n';
+    const updater = updaterFor(work, {
+      asset, sums, currentVersion: '0.6.0',
+      gitImpl: () => [{ version: '0.6.0', tag: 'v0.6.0' }],
+    });
+    const state = await updater.check();
+    expect(state.state).toBe('current');
+    expect(updater.fetchImpl.calls).toEqual([]);
+  } finally { work.cleanup(); }
+});
+
+test('a git answer with no usable release fails instead of falling back to the API', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work);
+    const updater = updaterFor(work, {
+      asset, sums: undefined,
+      gitImpl: () => [{ version: '0.6.0', tag: 'v0.6.0' }],
+    });
+    const state = await updater.check();
+    expect(state.state).toBe('failed');
+    expect(state.reason).toBe('update_release_not_found');
+    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([DOWNLOAD + '/v0.6.0/SHA256SUMS']);
+  } finally { work.cleanup(); }
+});
+
+test('when git is unavailable the API is still tried as a fallback', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset, release } = releaseFor(work);
+    const updater = updaterFor(work, { release, asset, gitImpl: () => { throw new Error('git missing'); } });
+    const state = await updater.check();
+    expect(state).toMatchObject({ state: 'available', latestVersion: '0.6.0' });
+    expect(updater.fetchImpl.calls.map(call => call.url)).toEqual([API_URL]);
+  } finally { work.cleanup(); }
+});
+
+test('a git-discovered archive that exceeds the size cap is refused', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work);
+    const sums = crypto.createHash('sha256').update(asset).digest('hex') + '  kimi-work-gateway-0.6.0.tgz\n';
+    const updater = updaterFor(work, {
+      asset, sums, maxAssetBytes: asset.length - 1,
+      gitImpl: () => [{ version: '0.6.0', tag: 'v0.6.0' }],
+    });
+    const state = await updater.install();
+    expect(state.state).toBe('failed');
+    expect(state.reason).toBe('update_package_too_large');
+  } finally { work.cleanup(); }
+});
+
+test('a git-discovered archive must still match the published checksum', async () => {
+  const work = workspace();
+  try {
+    basePackage(work);
+    const { asset } = releaseFor(work);
+    const wrong = 'f'.repeat(64) + '  kimi-work-gateway-0.6.0.tgz\n';
+    const updater = updaterFor(work, {
+      asset, sums: wrong,
+      gitImpl: () => [{ version: '0.6.0', tag: 'v0.6.0' }],
+    });
+    const state = await updater.install();
+    expect(state.state).toBe('failed');
+    expect(state.reason).toBe('update_checksum_mismatch');
+  } finally { work.cleanup(); }
+});
+
+test('git tag listing keeps only stable semver tags, newest first', () => {
+  const text = [
+    '1'.repeat(40) + '\trefs/tags/v0.6.0',
+    '2'.repeat(40) + '\trefs/tags/v0.6.0^{}',
+    '3'.repeat(40) + '\trefs/tags/v0.10.1',
+    '4'.repeat(40) + '\trefs/tags/v0.7.0-rc.1',
+    '5'.repeat(40) + '\trefs/tags/nightly',
+    '6'.repeat(40) + '\trefs/tags/v0.9.0',
+  ].join('\n');
+  expect(stableTagsFromRefs(text)).toEqual([
+    { version: '0.10.1', tag: 'v0.10.1' },
+    { version: '0.9.0', tag: 'v0.9.0' },
+    { version: '0.6.0', tag: 'v0.6.0' },
+  ]);
+  expect(stableTagsFromRefs('')).toEqual([]);
+  expect(() => stableTagsFromRefs(null)).toThrow('update_git_unavailable');
 });

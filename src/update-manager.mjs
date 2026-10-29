@@ -23,6 +23,7 @@ export const GATEWAY_REPOSITORY = 'wssz527/kimi-work-gateway';
 export const GATEWAY_LATEST_RELEASE_URL = 'https://api.github.com/repos/' + GATEWAY_REPOSITORY + '/releases/latest';
 export const GATEWAY_RELEASE_DOWNLOAD_ROOT = 'https://github.com/' + GATEWAY_REPOSITORY + '/releases/download';
 export const GATEWAY_RELEASE_PAGE_ROOT = 'https://github.com/' + GATEWAY_REPOSITORY + '/releases/tag';
+export const GATEWAY_GIT_URL = 'https://github.com/' + GATEWAY_REPOSITORY;
 
 const ACTIVE_SCHEMA = 1;
 const RELEASE_SCHEMA = 1;
@@ -595,6 +596,62 @@ function releasePage(tag) {
   return GATEWAY_RELEASE_PAGE_ROOT + '/' + encodeURIComponent(tag);
 }
 
+// A release discovered from git: the tag is known, the archive size is not.
+// Everything else is derived from the fixed release URL layout, so no API
+// metadata is required. `size` stays null and the download is bounded by
+// maxAssetBytes instead of an exact equality check.
+function releaseFromTag(tag, version) {
+  const assetName = GATEWAY_PACKAGE_NAME + '-' + version + '.tgz';
+  const sumsURL = GATEWAY_RELEASE_DOWNLOAD_ROOT + '/' + encodeURIComponent(tag) + '/SHA256SUMS';
+  return {
+    version,
+    tag,
+    releaseURL: releasePage(tag),
+    asset: {
+      name: assetName,
+      size: null,
+      url: GATEWAY_RELEASE_DOWNLOAD_ROOT + '/' + encodeURIComponent(tag) + '/' + encodeURIComponent(assetName),
+      digest: null,
+    },
+    sums: { name: 'SHA256SUMS', size: null, url: sumsURL },
+    discoveredBy: 'git',
+  };
+}
+
+// Stable versions only: no pre-release suffixes, no build metadata. Tags that
+// do not parse are skipped rather than failing the whole check.
+export function stableTagsFromRefs(text) {
+  if (typeof text !== 'string') throw updateError('update_git_unavailable');
+  const versions = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^[0-9a-f]{40,64}\trefs\/tags\/(.+)$/.exec(line.trim());
+    if (!match) continue;
+    let tag = match[1];
+    if (tag.endsWith('^{}')) tag = tag.slice(0, -3);
+    const version = tag.startsWith('v') ? tag.slice(1) : tag;
+    if (!SEMVER_PATTERN.test(version)) continue;
+    versions.set(version, 'v' + version);
+  }
+  return [...versions.keys()].sort((left, right) => compareVersions(right, left))
+    .map(version => ({ version, tag: versions.get(version) }));
+}
+
+function latestTagsViaGit({ timeoutMs, gitPath }) {
+  const binary = typeof gitPath === 'string' && gitPath !== '' ? gitPath : 'git';
+  let output;
+  try {
+    output = execFileSync(binary, ['ls-remote', '--tags', '--refs', GATEWAY_GIT_URL], {
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+  } catch {
+    throw updateError('update_git_unavailable');
+  }
+  return stableTagsFromRefs(output);
+}
+
 function validateDownloadURL(value, tag, assetName) {
   if (typeof value !== 'string' || value.length > 2048) throw updateError('update_release_asset_invalid');
   let url;
@@ -712,6 +769,7 @@ export class GatewayUpdater {
   constructor({
     updateDir, packageRoot, currentVersion, fetchImpl, env,
     timeoutMs, maxAssetBytes, maxUnpackedBytes, maxFiles, lockTimeoutMs, lockStaleMs, now,
+    gitImpl, gitPath,
   } = {}) {
     this.packageRoot = path.resolve(packageRoot ?? defaultPackageRoot());
     this.env = env ?? process.env;
@@ -732,7 +790,10 @@ export class GatewayUpdater {
       this.currentVersion = readPackageVersion(this.packageRoot);
     }
     if (fetchImpl !== undefined && typeof fetchImpl !== 'function') throw updateError('update_config_invalid');
+    if (gitImpl !== undefined && typeof gitImpl !== 'function') throw updateError('update_config_invalid');
     this.fetchImpl = fetchImpl ?? ((url, init) => globalThis.fetch(url, init));
+    this.gitImpl = gitImpl ?? null;
+    this.gitPath = typeof gitPath === 'string' && gitPath !== '' ? gitPath : null;
     this.timeoutMs = positiveInteger(timeoutMs, 30_000);
     this.maxAssetBytes = positiveInteger(maxAssetBytes, 32 * 1024 * 1024);
     this.maxUnpackedBytes = positiveInteger(maxUnpackedBytes, 128 * 1024 * 1024);
@@ -946,6 +1007,58 @@ export class GatewayUpdater {
   }
 
   async loadRelease() {
+    const discovered = await this.discoverViaGit();
+    if (discovered) return discovered;
+    return this.loadReleaseViaAPI();
+  }
+
+  // git tells us which tags exist, not which of them carry a published
+  // archive. Probe the archive checksum of each candidate newest-first and use
+  // the first tag whose release is actually downloadable. A tag without a
+  // release is skipped; it is not an error.
+  async discoverViaGit() {
+    let candidates;
+    try {
+      candidates = this.gitImpl
+        ? this.gitImpl()
+        : latestTagsViaGit({ timeoutMs: this.timeoutMs, gitPath: this.gitPath });
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+    const effective = this.effectiveVersion(this.readActiveOrNull());
+    let lastReason = null;
+    for (const candidate of candidates.slice(0, 5)) {
+      if (typeof candidate?.version !== 'string' || !SEMVER_PATTERN.test(candidate.version)) continue;
+      // Nothing at or below the installed version needs a download: report it
+      // as the latest so the check settles on "current".
+      if (effective && compareVersions(candidate.version, effective) <= 0) {
+        return releaseFromTag(candidate.tag ?? 'v' + candidate.version, candidate.version);
+      }
+      const release = releaseFromTag(candidate.tag ?? 'v' + candidate.version, candidate.version);
+      try {
+        release.asset.digest = await this.fetchSumsDigest(release);
+        return release;
+      } catch (error) {
+        lastReason = reasonOf(error);
+      }
+    }
+    // git answered but no candidate had a usable archive: that is a real
+    // failure, not a reason to fall back to the rate-limited API.
+    throw updateError(lastReason ?? 'update_release_not_found');
+  }
+
+  readActiveOrNull() {
+    try { return this.readActive(); } catch { return null; }
+  }
+
+  async fetchSumsDigest(release) {
+    const session = await this.openResponse(new URL(release.sums.url), 'sums', MAX_SHA256SUMS_BYTES);
+    const body = await this.readResponse(session, MAX_SHA256SUMS_BYTES, 'update_sums_invalid');
+    return parseChecksums(body, release.asset.name);
+  }
+
+  async loadReleaseViaAPI() {
     const session = await this.openResponse(new URL(GATEWAY_LATEST_RELEASE_URL), 'api', MAX_RELEASE_JSON_BYTES);
     const body = await this.readResponse(session, MAX_RELEASE_JSON_BYTES, 'update_response_too_large');
     let value;
@@ -1167,7 +1280,8 @@ export class GatewayUpdater {
     const session = await this.openResponse(new URL(asset.url), 'asset', this.maxAssetBytes);
     const { response, controller, deadline } = session;
     const declared = contentLength(response);
-    if (declared !== null && declared !== asset.size) {
+    const expectedSize = Number.isInteger(asset.size) && asset.size > 0 ? asset.size : null;
+    if (expectedSize !== null && declared !== null && declared !== expectedSize) {
       try { await response.body?.cancel?.(); } catch {}
       throw updateError('update_size_mismatch');
     }
@@ -1216,7 +1330,7 @@ export class GatewayUpdater {
         try { fs.closeSync(handle); } catch {}
       }
     }
-    if (total !== asset.size) {
+    if (expectedSize !== null && total !== expectedSize) {
       try { fs.rmSync(destination, { force: true }); } catch {}
       throw updateError('update_size_mismatch');
     }

@@ -75,6 +75,7 @@ async function installRelease(work, { baseVersion = '0.5.0', version = '0.6.0' }
     currentVersion: baseVersion,
     env: {},
     fetchImpl: fetchFor(asset),
+    gitImpl: () => [],
   });
   const state = await updater.install();
   return { base, state };
@@ -226,6 +227,7 @@ test('the launcher falls back to the base CLI after rollback', async () => {
     const updater = new GatewayUpdater({
       updateDir: work.updateDir, packageRoot: base, currentVersion: '0.5.0', env: {},
       fetchImpl: async () => { throw Error('offline'); },
+      gitImpl: () => [],
     });
     expect((await updater.rollback()).state).toBe('available');
     expect(resolveGatewayCLI({ updateDir: work.updateDir, basePackageRoot: base })).toBe(path.join(base, 'cli.mjs'));
