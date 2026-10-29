@@ -25,13 +25,13 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 macOS 终端：
 
 ```sh
-npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.7.1/kimi-work-gateway-0.7.1.tgz"
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.7.2/kimi-work-gateway-0.7.2.tgz"
 ```
 
 Windows PowerShell：
 
 ```powershell
-npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.7.1/kimi-work-gateway-0.7.1.tgz"
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.7.2/kimi-work-gateway-0.7.2.tgz"
 ```
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
@@ -351,6 +351,8 @@ kimi-work-gateway subagents-launch
 | `unavailable` | 没找到安装包或平台不支持检查 | 0 |
 
 `unverified` 与 `unavailable` 不阻止网关运行，但不能作为导入或调用成功的证明。最终以 Kimi 的导入提示与实际调用为准。Windows 会尝试用户安装目录和 Program Files；自定义安装位置可用 `--archive` 指定。
+
+定位只对**字符串表函数**使用括号匹配：它的函数体可达上百万字符，内部字面量含换行与 `}`，按行尾 `\n}` 截断会停在字面量中间。其余函数仍按 `\n}` 切分，因为给它们套用字符串感知扫描会被正则字面量与参数默认值干扰。字符串表以外的形状变化（例如数组声明不在函数开头）会让检查落到 `unverified`，不会误报 `verified`。
 
 ```sh
 kimi-work-gateway compat --config gateway.json

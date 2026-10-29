@@ -462,6 +462,37 @@ test('malformed JSON and bodies over 32 MiB are rejected before forwarding', asy
   }
 });
 
+test('a client that stalls mid-body is refused once, without a doubled wait', async () => {
+  // Answering while the client is still writing makes Bun drop the status line,
+  // so the body is drained before the rejection. A stalled client must be
+  // drained exactly once: a second drain doubled the wait from 2s to 4s.
+  const app = await fixture();
+  try {
+    const endpoint = new URL(app.url + '/chat/completions');
+    const started = Date.now();
+    const outcome = await new Promise(resolve => {
+      const client = http.request({
+        hostname: endpoint.hostname, port: endpoint.port, path: endpoint.pathname, method: 'POST',
+        headers: { Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json',
+          'Content-Length': String(64 * 1024 * 1024) },
+      }, response => {
+        let body = '';
+        response.on('data', chunk => { body += chunk; });
+        response.on('end', () => resolve({ status: response.statusCode, body, ms: Date.now() - started }));
+      });
+      client.on('error', error => resolve({ error: error.code, ms: Date.now() - started }));
+      client.write(Buffer.alloc(1024 * 1024, 'x'));
+    });
+    expect(outcome.status).toBe(413);
+    expect(JSON.parse(outcome.body).error.code).toBe('request_too_large');
+    // One drain window, not two. The bound is generous to stay stable on CI.
+    expect(outcome.ms).toBeLessThan(3200);
+    expect(app.requests).toHaveLength(0);
+  } finally {
+    await app.close();
+  }
+});
+
 test('instructionsFile inserts one managed system message idempotently', async () => {
   // Under the system temp dir, not the repository: a run that is interrupted
   // must not leave a tracked-looking directory behind in `test/`.

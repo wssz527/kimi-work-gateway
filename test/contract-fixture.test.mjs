@@ -55,6 +55,19 @@ test('parser result shape changes are unverified instead of throwing or certifyi
   } finally { f.cleanup(); }
 });
 
+test('table bodies that embed a closing brace inside a literal are still located', () => {
+  // A real string table embeds megabytes of quoted text; one entry containing a
+  // raw newline and `}` makes a naive `indexOf('\n}')` stop inside the literal,
+  // which reported `table_not_found` on Kimi 3.2.22. The entry must use a
+  // template literal with a real newline, not the two-character escape `\n`.
+  const marker = '\n}\nfunction _0xfeed() {\n  return 1;\n}';
+  const source = bundleSource().replace("const _0x1002 = ['fixture'];",
+    "const _0x1002 = ['fixture', `" + marker + "`];");
+  const located = locateContract(source);
+  expect(located.ok).toBe(true);
+  expect(located.parse(nativeCatalog(probeModels())).models).toHaveLength(5);
+});
+
 test('archive candidates include user installs and custom Program Files roots', () => {
   const candidates = archiveCandidates({ platform: 'win32', env: {
     LOCALAPPDATA: 'D:\\用户\\AppData\\Local', ProgramFiles: 'E:\\Programs',
