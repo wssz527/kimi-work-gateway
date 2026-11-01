@@ -1,0 +1,617 @@
+// First-run setup: one local page, one save.
+//
+// The page collects the upstream Base URL, the upstream key and the model
+// declarations in a single step. Nothing is guessed: each model's protocol and
+// capabilities come from the user's declarations, and a model that cannot be
+// declared unambiguously is refused instead of defaulted.
+//
+// The upstream key and the gateway token are written only to a private
+// `credentials.json` in the user's state directory (regular file, owned by this
+// user, mode 0600). They are never returned to the page, never written to a
+// log, and never stored in the configuration JSON or the npm package.
+
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readConfig } from './config.mjs';
+import { validatePanelModels } from './panel-settings.mjs';
+import { validateBaseURL } from './openai-backend.mjs';
+import { defaultStateDirectory } from './paths.mjs';
+import { readPanelEntry } from './service-manager.mjs';
+
+export const SETUP_SCHEMA_VERSION = 1;
+export const SETUP_CONFIG_FILE = 'gateway.json';
+export const SETUP_CREDENTIALS_FILE = 'credentials.json';
+export const SETUP_RECEIPT_FILE = 'setup-receipt.json';
+export const SETUP_BODY_LIMIT = 64 * 1024;
+export const UPSTREAM_KEY_ENV = 'KIMI_WORK_UPSTREAM_KEY';
+export const GATEWAY_TOKEN_ENV = 'KIMI_WORK_GATEWAY_TOKEN';
+export const DEFAULT_GATEWAY_PORT = 3426;
+const MODEL_FIELDS = new Set(['id', 'name', 'protocol', 'contextWindow', 'maxOutputTokens', 'tools', 'reasoning',
+  'inputModalities', 'reasoningEfforts', 'defaultEffort']);
+const CREDENTIAL_FIELDS = new Set(['schemaVersion', 'upstreamApiKey', 'gatewayToken', 'createdAt', 'updatedAt']);
+const KEY_PATTERN = /^[\x21-\x7e]{1,4096}$/;
+const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+
+export class SetupError extends Error {
+  constructor(code, status = 400, details = {}) {
+    super(code);
+    this.status = status;
+    this.details = details;
+  }
+}
+
+const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+function currentUid(platform = process.platform) {
+  return platform === 'win32' ? null : typeof process.getuid === 'function' ? process.getuid() : null;
+}
+
+// Any file this tool rewrites must be a regular file owned by the current user.
+// A symlink could redirect the credential write elsewhere, and a foreign owner
+// means the file is not ours to change.
+export function inspectOwnedFile(file, { platform = process.platform, uid = currentUid(platform) } = {}) {
+  let stat;
+  try { stat = fs.lstatSync(file); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { state: 'absent' };
+    throw new SetupError('setup_file_unreadable', 409);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new SetupError('setup_file_conflict', 409);
+  if (platform !== 'win32' && uid !== null && stat.uid !== uid) throw new SetupError('setup_file_owner_conflict', 409);
+  if (stat.size > 1024 * 1024) throw new SetupError('setup_file_conflict', 409);
+  return { state: 'ok', stat };
+}
+
+function readJson(file, options) {
+  const inspected = inspectOwnedFile(file, options);
+  if (inspected.state === 'absent') return null;
+  if (options?.requirePrivate && options.platform !== 'win32' && (inspected.stat.mode & 0o077) !== 0) {
+    throw new SetupError('setup_credentials_permissions', 409);
+  }
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch { throw new SetupError('setup_file_conflict', 409); }
+}
+
+function ensureDirectory(directory) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new SetupError('setup_directory_conflict', 409);
+}
+
+// Secrets are written with an exclusive temporary file, mode 0600, then
+// renamed into place. On POSIX the mode is re-asserted before the rename so a
+// permissive umask cannot widen it.
+export function writePrivateJson(file, value, { platform = process.platform } = {}) {
+  ensureDirectory(path.dirname(file));
+  const temporary = file + '.' + process.pid + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    if (platform !== 'win32') fs.chmodSync(temporary, 0o600);
+    fs.renameSync(temporary, file);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+export function setupPaths({ stateDir, configPath } = {}) {
+  const directory = path.resolve(stateDir ?? defaultStateDirectory());
+  return {
+    stateDir: directory,
+    config: path.resolve(configPath ?? path.join(directory, SETUP_CONFIG_FILE)),
+    credentials: path.join(directory, SETUP_CREDENTIALS_FILE),
+    receipt: path.join(directory, SETUP_RECEIPT_FILE),
+    // Written by the gateway once its control panel is up; `servicePaths` uses
+    // the same name so setup and `service status` read one file.
+    entry: path.join(directory, 'panel-entry.json'),
+  };
+}
+
+// The credentials file is created only by this module, so its own schema is
+// proof of ownership. Anything else at that path is a conflict, not an
+// invitation to overwrite.
+export function readCredentials(file, options = {}) {
+  const document = readJson(file, options);
+  if (document === null) return null;
+  if (typeof document !== 'object' || Array.isArray(document)
+    || Object.keys(document).some(key => !CREDENTIAL_FIELDS.has(key))
+    || document.schemaVersion !== SETUP_SCHEMA_VERSION
+    || typeof document.upstreamApiKey !== 'string' || !KEY_PATTERN.test(document.upstreamApiKey)
+    || typeof document.gatewayToken !== 'string' || !TOKEN_PATTERN.test(document.gatewayToken)) {
+    throw new SetupError('setup_credentials_conflict', 409);
+  }
+  return { upstreamApiKey: document.upstreamApiKey, gatewayToken: document.gatewayToken,
+    createdAt: document.createdAt, updatedAt: document.updatedAt };
+}
+
+export function newGatewayToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Keeps the existing token so the value Kimi already stores keeps working; a
+// missing or empty file gets a fresh random one.
+export function writeCredentials(file, { upstreamApiKey, existing } = {}, options = {}) {
+  const value = { schemaVersion: SETUP_SCHEMA_VERSION, upstreamApiKey,
+    gatewayToken: existing?.gatewayToken ?? newGatewayToken(),
+    createdAt: existing?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString() };
+  writePrivateJson(file, value, options);
+  return value;
+}
+
+export function normalizeSetupModels(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) throw new SetupError('invalid_models');
+  const models = value.map(row => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw new SetupError('invalid_models');
+    for (const key of Object.keys(row)) if (!MODEL_FIELDS.has(key)) throw new SetupError('invalid_models');
+    // A missing protocol is never filled in: a Chat-Completions-only service
+    // must not be silently declared as Responses.
+    if (!['chat', 'responses'].includes(row.protocol)) throw new SetupError('invalid_models');
+    return {
+      id: row.id, ...(row.name === undefined ? {} : { name: row.name }), protocol: row.protocol,
+      contextWindow: row.contextWindow,
+      ...(row.maxOutputTokens === undefined ? {} : { maxOutputTokens: row.maxOutputTokens }),
+      ...(row.tools === undefined ? {} : { tools: row.tools }),
+      ...(row.reasoning === undefined ? {} : { reasoning: row.reasoning }),
+      ...(row.inputModalities === undefined ? {} : { inputModalities: row.inputModalities }),
+      ...(row.reasoningEfforts === undefined ? {} : { reasoningEfforts: row.reasoningEfforts }),
+      ...(row.defaultEffort === undefined ? {} : { defaultEffort: row.defaultEffort }),
+    };
+  });
+  try { return validatePanelModels(models); }
+  catch (error) { throw new SetupError(error.message === 'protocol_conflict' ? 'protocol_conflict' : 'invalid_models'); }
+}
+
+export function normalizeSetupInput(input, { port = DEFAULT_GATEWAY_PORT, dns = true } = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new SetupError('invalid_setup');
+  // An omitted key means "keep the stored one"; a present but malformed key is
+  // rejected instead of being silently ignored.
+  const apiKey = input.apiKey === undefined ? '' : input.apiKey;
+  if (typeof apiKey !== 'string' || apiKey && !KEY_PATTERN.test(apiKey.trim())) throw new SetupError('invalid_api_key');
+  let baseURL;
+  try { baseURL = validateBaseURL(input.baseURL); } catch { throw new SetupError('invalid_base_url'); }
+  const models = normalizeSetupModels(input.models);
+  const gatewayPort = input.port === undefined ? port : Number(input.port);
+  if (!Number.isInteger(gatewayPort) || gatewayPort < 1024 || gatewayPort > 65535) throw new SetupError('invalid_port');
+  const dnsEnabled = input.dns === undefined ? dns : input.dns === true;
+  const config = { upstream: { baseURL, apiKeyEnv: UPSTREAM_KEY_ENV }, tokenEnv: GATEWAY_TOKEN_ENV,
+    port: gatewayPort, dns: { enabled: dnsEnabled, port: 53535 }, models };
+  try { readConfig(config); } catch { throw new SetupError('invalid_config'); }
+  return { config, apiKey: apiKey.trim() };
+}
+
+export function readSetupReceipt(file) {
+  let document;
+  try { document = readJson(file); } catch { return null; }
+  if (!document || typeof document !== 'object' || Array.isArray(document)
+    || document.schemaVersion !== SETUP_SCHEMA_VERSION || typeof document.config !== 'string'
+    || typeof document.credentials !== 'string' || typeof document.token !== 'string'
+    || !/^[a-f0-9]{32}$/.test(document.token)) return null;
+  return document;
+}
+
+// Ownership is a stable token plus the paths this tool wrote, not a hash of the
+// current content: the panel legitimately edits models, subagents and
+// translation after setup, and a content digest would make the next setup run
+// believe the file had become foreign.
+function ownershipMatches(receipt, paths, resolvedConfig) {
+  return Boolean(receipt && receipt.config === resolvedConfig
+    && receipt.credentials === path.resolve(paths.credentials) && receipt.stateDir === path.resolve(paths.stateDir));
+}
+
+// Fields this tool owns. Everything else in an existing document (translation,
+// subagents a user wrote by hand, future settings) is preserved verbatim, so a
+// re-run of setup never rebuilds the file and drops configuration.
+const OWNED_CONFIG_FIELDS = new Set(['upstream', 'tokenEnv', 'port', 'dns', 'models']);
+
+export function mergeSetupConfig(current, next) {
+  if (!current || typeof current !== 'object' || Array.isArray(current)) return next;
+  const merged = { ...current };
+  for (const [key, value] of Object.entries(next)) {
+    // `subagents` and `translation` are the panel's to manage; keep them even
+    // though setup does not produce them.
+    if (!OWNED_CONFIG_FIELDS.has(key) && current[key] !== undefined) continue;
+    merged[key] = value;
+  }
+  return merged;
+}
+
+// A hand-written configuration is never replaced: an existing file is only
+// accepted when the receipt proves this tool wrote that file before.
+export function saveSetup({ paths, config, apiKey, platform = process.platform,
+  uid = currentUid(platform) } = {}) {
+  if (!paths) throw new SetupError('invalid_setup');
+  const criteria = { platform, uid };
+  const receipt = readSetupReceipt(paths.receipt);
+  const resolvedConfig = path.resolve(paths.config);
+  let currentConfig = null;
+  try { currentConfig = readJson(paths.config, criteria); } catch (error) {
+    if (error instanceof SetupError) throw error;
+    throw new SetupError('setup_config_conflict', 409);
+  }
+  const owned = ownershipMatches(receipt, paths, resolvedConfig);
+  if (currentConfig !== null && !owned) throw new SetupError('setup_config_conflict', 409);
+  let existing = null;
+  try { existing = readCredentials(paths.credentials, { ...criteria, requirePrivate: true }); } catch (error) {
+    if (error instanceof SetupError) throw error;
+    throw new SetupError('setup_credentials_conflict', 409);
+  }
+  // Credentials without our receipt were written by something else (an older
+  // tool, a copied directory, a hand edit). Reusing their token would silently
+  // adopt a secret this tool never created.
+  if (existing && !owned) throw new SetupError('setup_credentials_conflict', 409);
+  // Preserve everything setup does not own, and keep the current models when
+  // the page did not declare any change.
+  let document = mergeSetupConfig(currentConfig, config);
+  try { readConfig(document); } catch { throw new SetupError('invalid_config'); }
+  // A blank key keeps the stored one; there is nothing to keep the first time.
+  const upstreamApiKey = typeof apiKey === 'string' && apiKey.trim() ? apiKey.trim() : existing?.upstreamApiKey;
+  if (!upstreamApiKey) throw new SetupError('invalid_api_key');
+  writePrivateJson(paths.config, document, criteria);
+  const credentials = writeCredentials(paths.credentials, { upstreamApiKey, existing }, criteria);
+  writePrivateJson(paths.receipt, { schemaVersion: SETUP_SCHEMA_VERSION, config: resolvedConfig,
+    credentials: path.resolve(paths.credentials), stateDir: path.resolve(paths.stateDir),
+    token: receipt?.token ?? crypto.randomBytes(16).toString('hex'),
+    createdAt: receipt?.createdAt ?? new Date().toISOString(),
+    at: new Date().toISOString() }, criteria);
+  return { credentials, config: document, receiptWritten: true };
+}
+
+// Public view for the page: never includes the upstream key or gateway token.
+export function setupState({ paths, platform = process.platform, uid = currentUid(platform) }) {
+  let config = null;
+  let credentials = null;
+  const criteria = { platform, uid };
+  try { config = readConfig(readJson(paths.config, criteria)); } catch {}
+  try { credentials = readCredentials(paths.credentials, criteria); } catch {}
+  const receipt = readSetupReceipt(paths.receipt);
+  const owned = ownershipMatches(receipt, paths, path.resolve(paths.config));
+  return {
+    schemaVersion: SETUP_SCHEMA_VERSION,
+    platform,
+    configured: Boolean(config && credentials),
+    baseURL: config?.upstream.baseURL ?? null,
+    port: config?.port ?? null,
+    dns: config ? { ...config.dns } : null,
+    models: config?.models ?? [],
+    apiKeySet: Boolean(credentials?.upstreamApiKey),
+    tokenSet: Boolean(credentials?.gatewayToken),
+    configuration: { state: config ? 'ready' : 'absent', file: paths.config },
+    credentials: { state: credentials ? 'ready' : 'absent', file: paths.credentials },
+    receipt: owned ? 'owned' : config || credentials ? 'foreign' : 'absent',
+    stateDir: paths.stateDir,
+  };
+}
+
+const UI = new URL('../ui/', import.meta.url);
+const CSP = "default-src 'none'; script-src 'nonce-__NONCE__'; style-src 'nonce-__NONCE__'; "
+  + "img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+  + "form-action 'none'; object-src 'none'";
+
+function authorized(actual, key) {
+  if (typeof actual !== 'string' || typeof key !== 'string') return false;
+  const left = Buffer.from(actual), right = Buffer.from('Bearer ' + key);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+async function readBody(req) {
+  if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) throw new SetupError('json_required', 415);
+  if (Number(req.headers['content-length']) > SETUP_BODY_LIMIT) throw new SetupError('request_too_large', 413);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > SETUP_BODY_LIMIT) throw new SetupError('request_too_large', 413);
+    chunks.push(Buffer.from(chunk));
+  }
+  let value;
+  try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new SetupError('invalid_json'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new SetupError('invalid_json');
+  return value;
+}
+
+// Only these service fields ever leave the setup server. The installer also
+// records paths and a launcher, but the page needs the outcome, not the
+// layout, and a whitelist keeps an unexpected installer value out of the API.
+const SERVICE_VIEW_FIELDS = ['state', 'reason', 'kind', 'platform', 'label', 'running', 'needsFreshEntry'];
+
+export function serviceView(service) {
+  if (!service || typeof service !== 'object' || Array.isArray(service)) return null;
+  const view = {};
+  for (const key of SERVICE_VIEW_FIELDS) {
+    const value = service[key];
+    if (typeof value === 'string' || typeof value === 'boolean') view[key] = value;
+  }
+  return Object.keys(view).length ? view : null;
+}
+function entryView(entry) {
+  return entry ? { url: entry.url, entryURL: entry.entryURL } : null;
+}
+
+function flushResponse(res) {
+  if (res.writableFinished) return Promise.resolve();
+  return new Promise(resolve => {
+    res.once('finish', resolve);
+    res.once('close', resolve);
+  });
+}
+
+// Loopback only, random per-run session key, exact Host and Origin checks, and
+// a bounded JSON body. The page is one self-contained file served with a
+// per-response nonce, so it needs no external assets and no relaxed CSP.
+export class SetupServer {
+  constructor({ stateDir, configPath, platform = process.platform, uiDir = fileURLToPath(UI),
+    onSaved, logger, installService, panelWaitMs = 20000, uid, now, sleep, pollMs = 250 } = {}) {
+    this.paths = setupPaths({ stateDir, configPath });
+    this.platform = platform;
+    this.uid = uid ?? currentUid(platform);
+    this.uiDir = uiDir;
+    this.onSaved = onSaved;
+    this.logger = logger;
+    this.installService = installService;
+    this.panelWaitMs = panelWaitMs;
+    this.pollMs = pollMs;
+    // A panel that is still starting is tracked in memory so the authenticated
+    // page can ask for it later. Both clocks are injectable so a test never
+    // sits in a real wait loop.
+    this.now = typeof now === 'function' ? now : Date.now;
+    this.sleep = typeof sleep === 'function' ? sleep
+      : ms => new Promise(resolve => setTimeout(resolve, ms));
+    // What the last save left behind, re-served to the page (and to the caller
+    // waiting on the handoff) while the panel boots.
+    this.lastSaved = null;
+    this.lastPanel = null;
+    this.pendingPanel = null;
+    this.serviceState = null;
+    this.key = crypto.randomBytes(32).toString('hex');
+    this.failures = 0;
+    this.pending = false;
+    this.server = null;
+  }
+
+  async start({ port = 0 } = {}) {
+    if (this.server) throw Error('setup_already_running');
+    this.template = fs.readFileSync(path.join(this.uiDir, 'setup.html'), 'utf8');
+    if (!this.template.includes('__SETUP_NONCE__')) throw Error('setup_page_invalid');
+    const server = http.createServer((req, res) => { void this.handle(req, res); });
+    server.requestTimeout = 20000;
+    server.headersTimeout = 10000;
+    try {
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, '127.0.0.1', resolve);
+      });
+    } catch { server.close(); throw Error('setup_port_unavailable'); }
+    this.server = server;
+    this.hostHeader = '127.0.0.1:' + server.address().port;
+    this.origin = 'http://' + this.hostHeader;
+    this.url = this.origin;
+    this.entryURL = this.origin + '/#key=' + this.key;
+    return this.entryURL;
+  }
+
+  async handle(req, res) {
+    const nonce = crypto.randomBytes(18).toString('base64');
+    const base = {
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': CSP.replaceAll('__NONCE__', nonce),
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'no-referrer',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    };
+    const json = (status, value) => {
+      res.writeHead(status, { ...base, 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(value));
+    };
+    try {
+      if (req.headers.host !== this.hostHeader) throw new SetupError('origin_refused', 403);
+      if (req.headers.origin !== undefined && req.headers.origin !== this.origin) throw new SetupError('origin_refused', 403);
+      const site = req.headers['sec-fetch-site'];
+      if (site !== undefined && !['same-origin', 'none'].includes(site)) throw new SetupError('origin_refused', 403);
+      if (req.url === '/' || req.url === '/index.html' || req.url === '/setup.html') {
+        if (!['GET', 'HEAD'].includes(req.method)) throw new SetupError('method_not_allowed', 405);
+        res.writeHead(200, { ...base, 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(req.method === 'HEAD' ? undefined : this.template.replaceAll('__SETUP_NONCE__', nonce));
+        return;
+      }
+      if (req.url === '/favicon.ico') throw new SetupError('not_found', 404);
+      if (req.url !== '/api/state' && req.url !== '/api/save') throw new SetupError('not_found', 404);
+      if (this.failures >= 20) throw new SetupError('too_many_attempts', 429);
+      if (!authorized(req.headers.authorization, this.key)) {
+        this.failures++;
+        throw new SetupError('unauthorized', 401);
+      }
+      if (req.method === 'GET' && req.url === '/api/state') {
+        // A save that left the panel starting keeps its expectation in memory,
+        // so this authenticated read can complete the handoff later. The
+        // response is flushed before the caller is released, for the same
+        // reason the save response is: a command that exits on completion
+        // closes the listener.
+        const completion = this.completePendingPanel();
+        const payload = { ok: true, state: setupState({ paths: this.paths, platform: this.platform }),
+          service: this.serviceState, panel: this.panelState() };
+        json(200, payload);
+        if (completion) {
+          await flushResponse(res);
+          this.onSaved?.(completion);
+        }
+        return;
+      }
+      if (req.method !== 'POST') throw new SetupError('method_not_allowed', 405);
+      if (req.headers.origin !== this.origin) throw new SetupError('origin_refused', 403);
+      if (this.pending) throw new SetupError('setup_busy', 409);
+      this.pending = true;
+      try {
+        const input = await readBody(req);
+        const saved = await this.save(input);
+        // The page is told first and the caller is released only after the
+        // response is flushed: a command that exits on save closes the listener,
+        // and closing it mid-response would reset the save the user just made.
+        await new Promise(resolve => {
+          res.once('finish', resolve);
+          res.once('close', resolve);
+          json(200, saved);
+        });
+        this.onSaved?.(saved);
+      } finally { this.pending = false; }
+    } catch (error) {
+      if (res.headersSent || res.destroyed) return;
+      const code = error instanceof SetupError && /^[a-z][a-z0-9_-]{0,100}$/.test(error.message) ? error.message : 'setup_failed';
+      json(error instanceof SetupError ? error.status : 503, { error: { code } });
+    }
+  }
+
+  // The files are written atomically, and one request at a time is enforced by
+  // `pending`, so two page saves cannot interleave. Installing the service is
+  // a separate, best-effort step: the setup is saved either way, and a failed
+  // service is reported to the page instead of being reported as a failure.
+  //
+  // After a successful save the page is handed the real control panel: the
+  // gateway publishes its link to a private entry file once its panel is up.
+  // The link is only returned to this authenticated page, and it is read from
+  // the 0600 file rather than printed into a log.
+  async save(input) {
+    const { config, apiKey } = normalizeSetupInput(input);
+    let previous = null;
+    try { previous = readJson(this.paths.config); } catch {}
+    // A restart replaces the panel process, and with it the session key in the
+    // entry file. The entry that exists before the install therefore proves
+    // nothing about the configuration just saved; only a different entryURL can.
+    const previousEntry = readPanelEntry(this.paths.entry, { uid: this.uid });
+    const { config: document } = saveSetup({ paths: this.paths, config, apiKey, platform: this.platform });
+    const state = setupState({ paths: this.paths, platform: this.platform });
+    const changed = previous === null || digest(previous) !== digest(document);
+    const result = { ok: true, changed, state, gateway: { baseURL: config.upstream.baseURL, port: config.port },
+      service: null, panel: null };
+    if (input.installService === true) {
+      if (typeof this.installService !== 'function') result.service = { state: 'unavailable', reason: 'service_unavailable' };
+      else {
+        try {
+          result.service = await this.installService({ paths: this.paths, config: document, stateDir: this.paths.stateDir });
+        } catch (error) {
+          result.service = { state: 'failed', reason: /^[a-z][a-z0-9_-]{0,100}$/.test(error?.message)
+            ? error.message : 'service_install_failed' };
+        }
+      }
+    }
+    result.service = serviceView(result.service);
+    const serviceState = result.service?.state;
+    // An install launches a new process, `started` restarted one, and `waiting`
+    // means the restart is still in flight (busy or timed out). All three can
+    // publish a different entry than the one that existed before this save.
+    const requiresFreshEntry = ['installed', 'started', 'waiting'].includes(serviceState)
+      || result.service?.needsFreshEntry === true;
+    const applied = input.installService === true
+      && ['installed', 'unchanged', 'started', 'waiting'].includes(serviceState);
+    let panel;
+    if (applied) {
+      panel = await this.awaitPanel({ previousEntryURL: requiresFreshEntry ? previousEntry?.entryURL ?? null : null });
+    } else if (input.installService === true) {
+      // A failed or unsupported service applied nothing: an entry left over from
+      // the previous configuration must not be offered as this one's panel.
+      panel = { state: 'manual' };
+    } else {
+      panel = previousEntry ? { state: 'ready', ...entryView(previousEntry) } : { state: 'manual' };
+    }
+    result.panel = panel;
+    this.lastSaved = { state: result.state, gateway: result.gateway };
+    this.lastPanel = panel;
+    this.serviceState = result.service;
+    // A panel that is still starting stays in memory, so an authenticated
+    // GET can finish the handoff once the gateway publishes its entry. Nothing
+    // is remembered for a manual save: there is no process to wait for.
+    this.pendingPanel = panel.state === 'waiting'
+      ? { reason: panel.reason, previousEntryURL: requiresFreshEntry ? previousEntry?.entryURL ?? null : null }
+      : null;
+    this.logger?.('saved', { models: state.models.length, port: config.port,
+      service: serviceState ?? 'manual', panel: panel.state });
+    return result;
+  }
+
+  // A freshly installed or restarted service needs a moment to launch, bind the
+  // gateway and write its entry. This only computes the state; the session link
+  // itself is added per request so it never appears in a log line or a receipt.
+  async awaitPanel({ previousEntryURL = null } = {}) {
+    const deadline = this.now() + this.panelWaitMs;
+    // Waiting only makes sense after the service step; a manual save has no
+    // process that could create the entry, so it must not stall the page.
+    for (;;) {
+      const entry = readPanelEntry(this.paths.entry, { uid: this.uid });
+      if (entry && entry.entryURL !== previousEntryURL) return { state: 'ready', ...entryView(entry) };
+      const remaining = deadline - this.now();
+      if (remaining <= 0) {
+        return previousEntryURL === null
+          ? { state: 'waiting', reason: 'panel_not_ready' }
+          : { state: 'waiting', reason: 'panel_restarting' };
+      }
+      await this.sleep(Math.min(this.pollMs, Math.max(20, remaining)));
+    }
+  }
+
+  // Public panel view. The entry is re-read on every call, so a waiting save
+  // turns ready as soon as the gateway publishes its own link, and an entry
+  // older than the save is never presented as the new configuration.
+  panelState() {
+    const pending = this.pendingPanel;
+    if (!pending) return this.lastPanel ?? null;
+    const entry = readPanelEntry(this.paths.entry, { uid: this.uid });
+    if (entry && entry.entryURL !== pending.previousEntryURL) {
+      return { state: 'ready', ...entryView(entry) };
+    }
+    return { state: 'waiting', reason: pending.reason };
+  }
+
+  // Completes a waiting save when the panel it expects appears. Called once
+  // from the authenticated state read; returns the same result shape a save
+  // returns so the caller can be released exactly as it would have been.
+  completePendingPanel() {
+    const pending = this.pendingPanel;
+    if (!pending) return null;
+    const panel = this.panelState();
+    if (panel.state !== 'ready') return null;
+    this.pendingPanel = null;
+    this.lastPanel = panel;
+    // A safe restart that timed out was reported as `waiting`; the new entry
+    // proves it finished, so the caller learns the configuration applied.
+    this.serviceState = this.serviceState?.state === 'waiting'
+      ? { ...this.serviceState, state: 'started', needsFreshEntry: false } : this.serviceState;
+    this.logger?.('panel', { service: this.serviceState?.state ?? 'manual' });
+    return { ok: true, changed: false, ...(this.lastSaved ?? {}), service: this.serviceState, panel };
+  }
+
+  async stop() {
+    if (!this.server) return;
+    const server = this.server;
+    this.server = null;
+    server.closeAllConnections?.();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+// Reads the two credential values for a background run. They stay in memory
+// only: a service definition carries neither the upstream key nor the token,
+// and the environment it launches with is built from this function.
+export function readCredentialEnvironment(configPath, credentialsPath, options = {}) {
+  let config;
+  try { config = readConfig(readJson(configPath, options)); }
+  catch { throw new SetupError(configPath && fs.existsSync(configPath) ? 'invalid_config' : 'setup_config_missing', 409); }
+  if (!config) throw new SetupError('setup_config_missing', 409);
+  const credentials = readCredentials(credentialsPath, { ...options, requirePrivate: true });
+  if (!credentials) throw new SetupError('setup_credentials_missing', 409);
+  return { config, environment: { [config.upstream.apiKeyEnv]: credentials.upstreamApiKey,
+    [config.tokenEnv]: credentials.gatewayToken } };
+}
+
+// The panel entry file holds the panel URL with its session fragment. It is
+// rewritten on every start and removed on exit, so `service status` can offer
+// a link the user can actually open.
+export function writePanelEntry(file, value, { platform = process.platform } = {}) {
+  writePrivateJson(file, { schemaVersion: 1, ...value, at: new Date().toISOString() }, { platform });
+}
+
+export function removePanelEntry(file) {
+  try { fs.rmSync(file, { force: true }); } catch {}
+}

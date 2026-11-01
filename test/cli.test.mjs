@@ -6,7 +6,8 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { run } from '../cli.mjs';
+import { run as runCommand } from '../cli.mjs';
+const run = (argv, env, io, overrides = {}) => runCommand(argv, env, io, { nativeConnection: false, ...overrides });
 import { defaultKimiDirectory, nativeFlagFile } from '../src/paths.mjs';
 import { SubagentPolicy, readSubagentJSON } from '../src/subagent-policy.mjs';
 
@@ -59,7 +60,8 @@ function closeUpstream(server) {
 const runners = [];
 
 function spawnCLI(args, env, executable = process.execPath) {
-  const child = spawn(executable, [bin, ...args], { env: childEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
+  const isolated = ['serve', 'panel'].includes(args[0]) ? [args[0], '--no-native', ...args.slice(1)] : args;
+  const child = spawn(executable, [bin, ...isolated], { env: childEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
   const runner = { child, stdout: '', stderr: '' };
   runners.push(child);
   child.stdout.setEncoding('utf8');
@@ -337,8 +339,8 @@ test('help variants list every command and exit 0', async () => {
   for (const args of [['help'], ['--help'], []]) {
     const runner = await runCLI(args);
     expect(runner.code).toBe(0);
-    for (const command of ['serve', 'prepare', 'remove-dns', 'status', 'copy-token',
-      'subagents-prepare', 'subagents-status', 'subagents-launch', 'help']) {
+    for (const command of ['setup', 'serve', 'prepare', 'remove-dns', 'status', 'copy-token',
+      'service install', 'service uninstall', 'subagents-prepare', 'subagents-status', 'subagents-launch', 'help']) {
       expect(runner.stdout).toContain(command);
     }
     expect(runner.stderr).toBe('');
@@ -562,6 +564,7 @@ test('serve applies the configured subagent policy and restores inheritance on e
     const io = capture();
     const exit = await run(['serve', '--config', config, '--state-dir', dir, '--kimi-dir', kimiDir],
       { [KEY_ENV]: KEY, [TOKEN_ENV]: TOKEN }, io, {
+        nativeIntegration: { reconcile: async () => ({ imported: true, state: 'ready', aliases: { [FORCE_MODEL]: 'byok-kth-kimi/' + FORCE_MODEL } }), close() {} },
         waitForShutdown: async () => {
           const document = readSubagentJSON(policyFile);
           expect(document.mode).toBe('force');
@@ -569,7 +572,7 @@ test('serve applies the configured subagent policy and restores inheritance on e
           expect(document.modelAlias).toBe('byok-kth-kimi/' + FORCE_MODEL);
           expect(document.homeDir).toBe(HOME(kimiDir));
           const status = JSON.parse(readFileSync(path.join(dir, 'status.json'), 'utf8'));
-          expect(status.subagents).toEqual({ mode: 'force', model: FORCE_MODEL, modelAlias: 'byok-kth-kimi/' + FORCE_MODEL });
+          expect(status.subagents).toEqual({ mode: 'force', transport: 'native-config', model: FORCE_MODEL, modelAlias: 'byok-kth-kimi/' + FORCE_MODEL });
         },
       });
     expect(exit).toBe(0);
@@ -978,6 +981,32 @@ test('a policy write failure is reported, releases the port and leaves the file 
     expect(statSync(policyPath).isDirectory()).toBe(true);
   } finally { await closeUpstream(server); clean(dir, kimiDir); }
 }, 20000);
+
+test('serve starts native preparation by default after publication and no-native explicitly disables it', async () => {
+  for (const disabled of [false, true]) {
+    const dir = tempDir(), kimiDir = tempDir();
+    let created = 0, ensured = 0, closed = 0;
+    try {
+      const config = writeConfig(dir, testConfig('http://127.0.0.1:9/v1'));
+      const status = path.join(dir, 'status.json');
+      const code = await runCommand(['serve', ...(disabled ? ['--no-native'] : []), '--config', config,
+        '--state-dir', dir, '--kimi-dir', kimiDir], { [KEY_ENV]: KEY, [TOKEN_ENV]: TOKEN }, capture(), {
+        nativeIntegration: { reconcile: async () => ({ state: 'account-unverified', imported: false }), close() {} },
+        createNativeConnection: options => {
+          created++;
+          expect(options.env[KEY_ENV]).toBe(KEY);
+          return { status: { state: 'ready' }, desktop: { inspect: () => ({ state: 'active' }) },
+            ensure: async () => { expect(existsSync(status)).toBe(true); ensured++; },
+            close: () => { closed++; }, syncNative: async () => ({ ok: false }) };
+        },
+        waitForShutdown: async () => { expect(ensured).toBe(disabled ? 0 : 1); },
+      });
+      expect(code).toBe(0);
+      expect(created).toBe(disabled ? 0 : 1);
+      expect(closed).toBe(disabled ? 0 : 1);
+    } finally { clean(dir, kimiDir); }
+  }
+});
 
 test('status tolerates malformed pool summaries and rejects incomplete policy files without writing', async () => {
   const dir = tempDir(), kimiDir = tempDir();

@@ -32,6 +32,35 @@ function fixture(overrides = {}) {
 
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
+test('a live detached host retains its launch after the original gateway exits', () => {
+  const f = fixture({ isAlive: pid => pid === 5555 });
+  const id = crypto.randomUUID();
+  writeSubagentJSON(f.runtime.launchFile, { schemaVersion: 1, id, pid: 4444, homeDir: f.runtime.homeDir });
+  expect(f.runtime.activeLaunch()).toBeNull();
+  writeSubagentJSON(f.runtime.receiptFile, { schemaVersion: 1, id, pid: 5555, homeDir: f.runtime.homeDir, state: 'active' });
+  expect(f.runtime.activeLaunch().id).toBe(id);
+  writeSubagentJSON(f.runtime.receiptFile, { schemaVersion: 1, id: crypto.randomUUID(), pid: 5555, homeDir: f.runtime.homeDir, state: 'active' });
+  expect(f.runtime.activeLaunch()).toBeNull();
+  writeSubagentJSON(f.runtime.receiptFile, { schemaVersion: 1, id, pid: 5555, homeDir: f.runtime.homeDir, state: 'exited' });
+  expect(f.runtime.activeLaunch()).toBeNull();
+});
+
+test('macOS process discovery distinguishes a registered Kimi application from its Electron node launcher', async () => {
+  const { inspectApplicationProcesses } = await import('../src/translation-runtime.mjs');
+  const application = '/Applications/Kimi.app/Contents/MacOS/Kimi';
+  const stdout = '11 ' + application + '\n22 ' + application + '\n';
+  const inspect = registrations => inspectApplicationProcesses(application, 'darwin', { run: (file, args) => {
+    if (file === 'ps') return { status: 0, stdout };
+    expect(file).toBe('osascript');
+    expect(args.join(' ')).toContain('NSRunningApplication');
+    return { status: 0, stdout: JSON.stringify(registrations) };
+  } });
+  expect(inspect([{ pid: 11, registered: false }, { pid: 22, registered: true }]).pids).toEqual([22]);
+  expect(inspect([{ pid: 11, registered: true }, { pid: 22, registered: true }]).pids).toEqual([11, 22]);
+  expect(inspect([{ pid: 11, registered: false }, { pid: 22, registered: false }]).pids).toEqual([11, 22]);
+  expect(inspect([{ pid: 11, registered: false }]).pids).toEqual([11, 22]);
+});
+
 test('translation settings reject credentials and unsafe endpoints while preserving old configuration shape', () => {
   expect(normalizeTranslationConfig()).toEqual(TRANSLATION_DEFAULTS);
   const document = { upstream: { baseURL: 'https://example.test/v1', apiKeyEnv: 'TEST_KEY' }, models: [] };

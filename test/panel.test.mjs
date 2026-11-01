@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { run } from '../cli.mjs';
+import { run as runCLI } from '../cli.mjs';
+const run = (argv, env, io, overrides = {}) => runCLI(argv, env, io, { nativeConnection: false, ...overrides });
 import { readConfig } from '../src/config.mjs';
 import { KimiWorkGateway } from '../src/gateway.mjs';
 import { OpenAIBackend } from '../src/openai-backend.mjs';
@@ -156,13 +157,23 @@ test('state reports actual selection and runtime evidence without credentials or
   for (const hidden of [KEY, TOKEN, f.panel.key, '/private/bundle', f.dir, f.policy.ownerID]) expect(text).not.toContain(hidden);
 });
 
+test('legacy remote evidence is not exposed as current native desktop support', async () => {
+  const f = await fixture({ nativeConnection: { status: {}, close() {}, desktop: {
+    inspect: () => ({ state: 'active', enabled: true, version: '3.2.23',
+      remote: { state: 'ready', catalog: 'catalog-extended', added: 4, secret: KEY } }),
+  } } });
+  const state = await f.controller.state();
+  expect(state.integration.desktop).toEqual({ state: 'active', enabled: true, version: '3.2.23' });
+  expect(JSON.stringify(state)).not.toContain('catalog-extended');
+});
+
 test('apply persists force model and effort, updates live policy, and survives a restart', async () => {
   const f = await fixture();
   const before = await f.controller.state();
   const response = await api(f, '/api/subagents', { revision: before.revision, mode: 'force', model: CHILD, effort: 'low' });
   expect(response.status).toBe(200);
   const { state } = await response.json();
-  const selected = { mode: 'force', model: CHILD, modelAlias: 'byok-kth-resp/' + CHILD, effort: 'low' };
+  const selected = { mode: 'force', transport: 'native-config', model: CHILD, modelAlias: 'byok-kth-resp/' + CHILD, effort: 'low' };
   expect(state.subagents.policy).toEqual(selected);
   expect(state.subagents.runtime.state).toBe('not-prepared');
   expect(readSubagentJSON(f.file).retained).toEqual(f.document.retained);
@@ -175,8 +186,8 @@ test('apply persists force model and effort, updates live policy, and survives a
   try {
     expect((await restarted.state()).subagents.configured).toEqual(selected);
     const inherited = await restarted.apply({ revision: state.revision, mode: 'inherit' });
-    expect(inherited.subagents.policy).toEqual({ mode: 'inherit' });
-    expect(readSubagentJSON(f.file).subagents).toEqual({ mode: 'inherit' });
+    expect(inherited.subagents.policy).toEqual({ mode: 'inherit', transport: 'native-config' });
+    expect(readSubagentJSON(f.file).subagents).toEqual({ mode: 'inherit', transport: 'native-config' });
   } finally { await restarted.close(); nextPolicy.close(); }
 });
 
@@ -221,7 +232,7 @@ test('null effort uses the model default without persisting a null value', async
   const f = await fixture();
   const { revision } = await f.controller.state();
   const state = await f.controller.apply({ revision, mode: 'force', model: CHILD, effort: null });
-  expect(readSubagentJSON(f.file).subagents).toEqual({ mode: 'force', model: CHILD });
+  expect(readSubagentJSON(f.file).subagents).toEqual({ mode: 'force', transport: 'native-config', model: CHILD });
   expect(state.subagents.policy.effort).toBe('high');
 });
 

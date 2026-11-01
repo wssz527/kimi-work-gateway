@@ -36,7 +36,9 @@ const gateway = new KimiWorkGateway({ backend: { listModels: async () => models,
     const definition = agent?.function || agent;
     const rootIndex = body.messages?.findLastIndex(message => message.role === 'user' && message.content === 'ROOT_LAB') ?? -1;
     const rootRequest = rootIndex >= 0;
-    requests.push({ phase, protocol, model: body.model, rootRequest, poolVisible: Boolean(definition?.parameters?.properties?.model) });
+    requests.push({ phase, protocol, model: body.model, rootRequest, poolVisible: Boolean(definition?.parameters?.properties?.model),
+      primaryAdvertised: /\bprimary\b/.test(definition?.parameters?.properties?.model?.description || ''),
+      ...(phase === 'primary' ? { toolResult: body.messages?.filter(message => message.role === 'tool').map(message => message.content) } : {}) });
     const called = body.messages?.slice(rootIndex + 1).some(message => message.role === 'tool');
     const spawn = phase !== 'baseline' && rootRequest && !called;
     const headers = { 'Content-Type': 'text/event-stream' };
@@ -91,10 +93,17 @@ try {
   await run(); assert.equal(requests.at(-1).poolVisible, false);
   const policy = normalizeSubagentPolicy({ mode: 'pool', model: models[1].id, models: models.map(row => ({ id: row.id, description: 'Synthetic ' + row.name })) }, models);
   assert.equal(bridge.update(policy).state, 'file-applied');
-  for (const [name, choice, expected] of [['pool', aliases[1], 1], ['responses', aliases[2], 2], ['default', undefined, 1], ['primary', 'primary', 0]]) {
+  for (const [name, choice, expected] of [['pool', aliases[1], 1], ['responses', aliases[2], 2], ['default', undefined, 1], ['parent-alias', aliases[0], 0]]) {
     phase = name; childChoice = choice; await run();
     assert.ok(requests.some(row => row.phase === name && !row.rootRequest && row.model === models[expected].id), name + '_child_missing');
     if (name === 'responses') assert.ok(requests.some(row => row.phase === name && row.protocol === 'responses'));
+  }
+  const primarySupported = requests.some(row => row.phase === 'pool' && row.primaryAdvertised);
+  phase = 'primary'; childChoice = 'primary'; await run();
+  if (primarySupported) assert.ok(requests.some(row => row.phase === 'primary' && !row.rootRequest && row.model === models[0].id));
+  else {
+    assert.ok(requests.some(row => row.phase === 'primary' && row.toolResult?.some(text => text.includes('Invalid model "primary"'))));
+    assert.equal(requests.filter(row => row.phase === 'primary' && !row.rootRequest).length, 0);
   }
   assert.equal(bridge.inspect().observed.state, 'observed-schema');
   await sync(); phase = 'rebuilt'; childChoice = aliases[1]; await run(); assert.ok(requests.some(row => row.phase === 'rebuilt' && row.model === models[1].id));

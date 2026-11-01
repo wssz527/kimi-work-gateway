@@ -118,6 +118,37 @@ function messageOf(panel) {
   return panel.nodes.get('toast').children.map((child) => child.textContent || '').join('');
 }
 
+test('native connection status distinguishes accepted pending imports, login and cancelled preparation', () => {
+  const panel = ui();
+  const render = integration => {
+    panel.renderOverview(baseState({ integration }));
+    return panel.nodes.get('native-state').textContent;
+  };
+  expect(render({ state: 'pending', imported: false })).toContain('等待 Kimi 内核');
+  expect(render({ state: 'needs-native-import', nativeImport: { reason: 'native_import_waiting_login' } })).toContain('登录');
+  expect(render({ preparation: { state: 'cancelled' } })).toContain('授权已取消');
+  expect(render({ imported: true })).toContain('已接入 Kimi 原生选择器');
+});
+
+test('desktop scope stays explicit and legacy remote evidence cannot become phone support', () => {
+  const panel = ui();
+  const render = integration => {
+    panel.renderOverview(baseState({ integration }));
+    const hidden = panel.nodes.get('native-remote').hidden;
+    return { hidden, word: panel.nodes.get('native-remote-word').textContent,
+      note: panel.nodes.get('native-remote-note').textContent,
+      tone: panel.nodes.get('native-remote-dot').dataset.tone };
+  };
+  expect(render(undefined).hidden).toBe(true);
+  expect(render({ state: 'ready', imported: true })).toMatchObject({ hidden: false, word: '仅桌面' });
+  const scoped = render({ state: 'ready', imported: true, desktop: { state: 'active', enabled: true,
+    remote: { state: 'ready', catalog: 'catalog-extended', added: 4, reason: 'synthetic-private-reason' } } });
+  expect(scoped).toMatchObject({ tone: 'neutral', word: '仅桌面' });
+  expect(scoped.note).toContain('不同步模型或登录态到 Kimi 手机端');
+  expect(scoped.note).not.toContain('catalog');
+  expect(scoped.note).not.toContain('synthetic-private-reason');
+});
+
 test('the panel resolves complete gateway model IDs without confusing provider prefixes', () => {
   const panel = ui();
   panel.state.data = baseState();

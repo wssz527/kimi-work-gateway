@@ -545,7 +545,7 @@
           <strong id="tr-verdict-word">读取中</strong>
           <span class="verdict__note" id="tr-verdict-note"></span>
         </p>
-        <p class="hint" id="tr-runtime-note">当前 Kimi 需要正常退出后，再从网关启动才能带上翻译；本面板不会结束已在运行的 Kimi，也不会自动点击任何按钮。</p>
+        <p class="hint" id="tr-runtime-note">翻译保存后由接入宿主应用。Kimi 重启或更新后持续检查，确认空闲后恢复；无法确认忙闲时保持等待，不强制结束任务。</p>
         <div class="panel__actions panel__actions--start">
           <button class="btn btn--outline" id="tr-launch" type="button" data-action="launch-translated-kimi">
             <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>从网关启动 Kimi
@@ -554,7 +554,7 @@
             <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>检查翻译状态
           </button>
         </div>
-        <p class="hint">网关维护翻译会话；指定子代理模型时，同时使用已验证的运行时副本。语言、服务或展示切换保存后由会话应用，无需重启推理网关。</p>
+        <p class="hint">网关维护接入与翻译会话；Kimi 重启或更新后自动检查并恢复已启用翻译。原生子代理使用本机配置通道。语言、服务或展示切换保存后由会话应用，无需重启推理网关。</p>
       </div>
     </section>
 
@@ -700,27 +700,35 @@
 
       <div class="panel">
         <div class="panel__head">
-          <h2>运行时操作</h2>
-          <p>启动请求不会强制结束已运行的 Kimi。</p>
+          <h2>Kimi 接入</h2>
+          <p>目录保存后自动同步。首次接入需要登录 Kimi，并可能请求系统授权。</p>
         </div>
-        <div class="actions-grid">
-          <button class="btn btn--outline" data-action="prepare-runtime" type="button">
-            <svg class="icon" aria-hidden="true"><use href="#i-box"/></svg>准备副本
+        <p class="note" id="native-state" role="status">正在检查接入…</p>
+        <p class="verdict" id="native-remote" role="status" hidden>
+          <span class="dot" id="native-remote-dot" data-tone="neutral"></span>
+          <span>接入范围</span>
+          <strong id="native-remote-word">仅桌面</strong>
+          <span class="verdict__note" id="native-remote-note">只接入本机官方 Kimi 桌面 Work，不同步到 Kimi 手机端。</span>
+        </p>
+        <div class="panel__actions">
+          <button class="btn btn--primary" data-action="connect-kimi" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>重新接入 Kimi
           </button>
           <button class="btn btn--outline" data-action="launch-kimi" type="button">
             <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>启动 Kimi
           </button>
-          <button class="btn btn--outline" data-action="copy-token" type="button">
-            <svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>复制 Token
-          </button>
-          <button class="btn btn--outline" data-action="prepare-native" type="button">
-            <svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg>准备原生设置
-          </button>
-          <button class="btn btn--outline" data-action="remove-dns" type="button">
-            <svg class="icon" aria-hidden="true"><use href="#i-link"/></svg>撤销 DNS 映射
-          </button>
         </div>
-        <p class="hint">继承模式下的“启动 Kimi”打开原版应用，不加载副本；强制子代理模式仍需通过副本启动能力检查。原生设置由系统请求管理员授权。</p>
+        <p class="hint">后台会检查应用重启与更新，空闲后恢复接入。取消过系统授权时，可点击“重新接入 Kimi”继续。已有会话正在运行时会等待。</p>
+        <details>
+          <summary>手动设置与兼容操作</summary>
+          <div class="actions-grid">
+            <button class="btn btn--outline" data-action="prepare-runtime" type="button">准备兼容副本</button>
+            <button class="btn btn--outline" data-action="copy-token" type="button">复制 Token</button>
+            <button class="btn btn--outline" data-action="prepare-native" type="button">准备原生设置</button>
+            <button class="btn btn--outline" data-action="remove-dns" type="button">撤销 DNS 映射</button>
+          </div>
+          <p class="hint">原生子代理使用本机配置通道；兼容副本仅用于旧通道。撤销 DNS 映射后，原生目录导入需重新准备。</p>
+        </details>
       </div>
     </section>
   </main>

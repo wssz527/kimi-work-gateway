@@ -13,6 +13,15 @@ const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)
 export const KNOWN_TRANSLATION_KIMI_VERSIONS = new Set(['3.2.21']);
 export const TRANSLATION_KIMI_VERSIONS = KNOWN_TRANSLATION_KIMI_VERSIONS;
 export const translationRevision = (settings, homeDir) => digest({ homeDir, settings });
+export function remoteRuntimeRevision() {
+  try {
+    return digest(['translation-host.mjs', 'remote-companion-runtime.mjs', 'remote-companion.mjs',
+      'remote-work-hook.mjs', 'remote-work-models.mjs', 'remote-credentials.mjs',
+      'remote-credentials-service.mjs', 'remote-credentials-client.mjs', 'remote-update-proxy.mjs',
+      'remote-update-client.mjs', 'remote-update-helper.mjs', 'native/remote-official-updater.node']
+      .map(name => crypto.createHash('sha256').update(fs.readFileSync(new URL(name, import.meta.url))).digest('hex')));
+  } catch { return undefined; }
+}
 export const translationAlive = pid => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
@@ -43,6 +52,34 @@ export function readTranslationSettings(file, homeDir) {
   return { ...value, settings };
 }
 
+const resolvePath = (value, platform) => (platform === 'win32' ? path.win32 : path).resolve(value);
+
+// Installation identity is what decides whether a supervised restart is an
+// update or a plain re-open. It deliberately keeps the version string as one
+// component among path/mtime/size rather than as a gate: a rebuilt build at the
+// same version still counts as a new installation.
+export function installationIdentity(installation, platform = process.platform) {
+  if (!installation || typeof installation.archive !== 'string' || typeof installation.application !== 'string') return null;
+  let stamp = '';
+  try {
+    const stat = fs.statSync(installation.archive);
+    stamp = stat.size + ':' + Math.round(stat.mtimeMs);
+  } catch {}
+  const archive = resolvePath(installation.archive, platform);
+  const application = resolvePath(installation.application, platform);
+  const version = typeof installation.version === 'string' ? installation.version : 'unknown';
+  return { archive, application, version, signature: digest({ archive, application, version, stamp }) };
+}
+
+export function installationChanged(recorded, current, platform = process.platform) {
+  if (!recorded || !current) return false;
+  const before = typeof recorded.signature === 'string' ? recorded : installationIdentity(recorded, platform);
+  const after = installationIdentity(current, platform);
+  if (!before || !after) return false;
+  if (before.archive !== after.archive || before.application !== after.application) return true;
+  return before.signature !== after.signature;
+}
+
 export function translationInstallation({ archive, application, platform = process.platform, env = process.env } = {}) {
   const file = archive || archiveCandidates({ platform, env }).find(candidate => fs.existsSync(candidate));
   if (!file || !fs.existsSync(file)) throw Error('translation_kimi_unavailable');
@@ -59,12 +96,56 @@ export function translationInstallation({ archive, application, platform = proce
 }
 
 export function kimiProcessRunning(application, platform = process.platform) {
-  const name = path.basename(application).replace(/\.exe$/i, '');
-  const result = platform === 'win32'
-    ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "if (Get-Process -Name '" + name.replaceAll("'", "''") + "' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"], { windowsHide: true, timeout: 10000 })
-    : spawnSync('pgrep', ['-x', name], { timeout: 10000 });
-  if (result.error || ![0, 1].includes(result.status)) throw Error('translation_process_check_failed');
-  return result.status === 0;
+  return kimiProcessIds(application, platform).length > 0;
+}
+
+// Pids of processes whose executable is this exact application path.
+//
+// Matching by process name alone is not proof: a second copy from another
+// install, or a differently configured userData dir, shares the name. Committing
+// a quit to the wrong pid is unacceptable, so the executable path is compared
+// and callers get a count of name-only matches to detect ambiguity.
+export function inspectApplicationProcesses(application, platform = process.platform, { run = spawnSync } = {}) {
+  const paths = platform === 'win32' ? path.win32 : path;
+  const executable = paths.resolve(application);
+  const name = paths.basename(executable).replace(/\.exe$/i, '');
+  const output = platform === 'win32'
+    ? run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "(Get-Process -Name '" + name.replaceAll("'", "''") + "' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id.ToString() + ' ' + $_.Path })"],
+      { windowsHide: true, timeout: 10000, encoding: 'utf8' })
+    : run('ps', ['-axo', 'pid=,comm='], { timeout: 10000, encoding: 'utf8' });
+  if (output.error || output.status !== 0) throw Error('translation_process_check_failed');
+  const rows = String(output.stdout || '').split('\n').map(line => line.trim()).filter(Boolean)
+    .map(line => {
+      const at = line.search(/\s/);
+      return at < 0 ? null : { pid: Number(line.slice(0, at)), command: line.slice(at + 1).trim() };
+    }).filter(row => row && Number.isInteger(row.pid) && row.pid > 0);
+  let sameName = rows.filter(row => paths.basename(row.command).replace(/\.exe$/i, '').toLowerCase() === name.toLowerCase());
+  if (platform === 'darwin' && sameName.length > 1 && sameName.length <= 64) {
+    const pids = sameName.map(row => row.pid);
+    const script = 'ObjC.import("AppKit"); JSON.stringify(' + JSON.stringify(pids)
+      + '.map(pid=>{const app=$.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);'
+      + 'return {pid,registered:!!app&&!app.isNil()};}));';
+    try {
+      const result = run('osascript', ['-l', 'JavaScript', '-e', script], { timeout: 10000, encoding: 'utf8' });
+      const values = result.status === 0 && !result.error ? JSON.parse(String(result.stdout || '')) : null;
+      if (Array.isArray(values) && values.length === pids.length
+        && values.every((row, index) => row?.pid === pids[index] && typeof row.registered === 'boolean')
+        && values.some(row => row.registered)) {
+        const registered = new Set(values.filter(row => row.registered).map(row => row.pid));
+        sameName = sameName.filter(row => registered.has(row.pid));
+      }
+    } catch {}
+  }
+  const matches = sameName.filter(row => {
+    const value = paths.resolve(row.command);
+    return platform === 'win32' ? value.toLowerCase() === executable.toLowerCase() : value === executable;
+  });
+  return { pids: matches.map(row => row.pid), nameMatches: sameName.length, total: rows.length };
+}
+
+export function kimiProcessIds(application, platform = process.platform) {
+  return inspectApplicationProcesses(application, platform).pids;
 }
 
 export class TranslationRuntime {
@@ -93,6 +174,52 @@ export class TranslationRuntime {
     if (previous?.revision !== desired.revision) writeSubagentJSON(this.settingsFile, desired);
     this.settings = settings;
     return settings;
+  }
+
+  // The enabled intent lives in translation-settings.json. A supervisor reads it
+  // without reconfiguring so that an inspection never rewrites user state.
+  desiredSettings() {
+    return readTranslationSettings(this.settingsFile, this.homeDir);
+  }
+
+  activeLaunch() {
+    let launch;
+    try { launch = readSubagentJSON(this.launchFile); }
+    catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw Error('translation_session_conflict');
+    }
+    if (!launch || launch.homeDir !== this.homeDir || launch.handedOff === true) return null;
+    if (this.isAlive(launch.pid)) return launch;
+    const receipt = this.sessionReceipt();
+    return receipt?.id === launch.id && receipt.state !== 'exited' && this.isAlive(receipt.pid) ? launch : null;
+  }
+
+  // The last receipt this scope wrote, including the managed application pid.
+  // A receipt left behind by a dead host is still evidence that a managed
+  // session existed and when it ended; the supervisor needs that to decide
+  // whether a newly appeared Kimi instance replaced ours or was user-started.
+  sessionReceipt() {
+    let receipt;
+    try { receipt = readSubagentJSON(this.receiptFile); }
+    catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw Error('translation_session_conflict');
+    }
+    if (!receipt || receipt.schemaVersion !== 1 || receipt.homeDir !== this.homeDir) return null;
+    return receipt;
+  }
+
+  runningPids(application = this.locate({ ...this.installationOptions, env: this.env }).application,
+    platform = this.platform || process.platform) {
+    return kimiProcessIds(application, platform);
+  }
+
+  // Application processes plus the name-only match count, so a caller can refuse
+  // to act when more than one build shares the executable name.
+  inspectApplication(application = this.locate({ ...this.installationOptions, env: this.env }).application,
+    platform = this.platform || process.platform) {
+    return inspectApplicationProcesses(application, platform);
   }
 
   inspect() {
@@ -192,9 +319,10 @@ export class TranslationRuntime {
     return { mode: 'unusable', reason, state: status.state };
   }
 
-  async launch({ subagentRuntime, force = false, isRunning, userDataDir, protectedEnvNames = [] } = {}) {
+  async launch({ subagentRuntime, force = false, isRunning, userDataDir, protectedEnvNames = [], controlOnly = false,
+    nativeBridge = false, inheritLegacyTranslation = false, remoteModels = false } = {}) {
     const desired = readTranslationSettings(this.settingsFile, this.homeDir);
-    if (!desired.settings.enabled) throw Error('translation_not_enabled');
+    if (!desired.settings.enabled && !controlOnly) throw Error('translation_not_enabled');
     const current = this.inspect();
     if (current.state === 'stale') throw Error('translation_host_stale');
     let context;
@@ -238,17 +366,33 @@ export class TranslationRuntime {
     let previous;
     try { previous = readSubagentJSON(this.launchFile); }
     catch (error) { if (error.code !== 'ENOENT') throw Error('translation_session_conflict'); }
-    if (previous && this.isAlive(previous.pid) && Date.now() - previous.at < 15000) return { state: 'starting' };
+    if (previous?.handedOff !== true && previous && this.isAlive(previous.pid) && Date.now() - previous.at < 15000) {
+      return { state: 'starting' };
+    }
     if (previous) fs.rmSync(this.launchFile);
     const id = crypto.randomUUID();
     const request = { schemaVersion: 1, id, pid: process.pid, at: Date.now(), homeDir: this.homeDir,
       ...installation, application, ...(context ? { bundleDir: context.bundleDir } : {}),
       discoveredApplication: installation.application,
+      installationIdentity: installationIdentity({ ...installation, application }),
+      controlOnly: controlOnly === true,
+      nativeBridge: nativeBridge === true,
+      remoteModels: remoteModels === true,
+      ...(remoteModels === true ? { remoteRevision: remoteRuntimeRevision() } : {}),
+      inheritLegacyTranslation: inheritLegacyTranslation === true,
       protectedEnvNames: protectedEnvNames.filter(name => typeof name === 'string' && /^[A-Z_][A-Z0-9_]{0,127}$/.test(name) && !reservedEnvName(name)),
       subagent: subagent.mode === 'unusable' ? { adopted: false, reason: subagent.reason }
         : { adopted: context !== undefined, ...(subagent.state ? { state: subagent.state } : {}) },
       ...(userDataDir ? { userDataDir: path.resolve(userDataDir) } : {}) };
-    fs.writeFileSync(this.launchFile, JSON.stringify(request), { flag: 'wx', mode: 0o600 });
+    try {
+      fs.writeFileSync(this.launchFile, JSON.stringify(request), { flag: 'wx', mode: 0o600 });
+    } catch (error) {
+      // Another process (a supervisor tick or a second panel action) won the
+      // race. Its record is authoritative; starting a second helper now is the
+      // duplicate-host bug this record exists to prevent.
+      if (error.code === 'EEXIST') return { state: 'starting', version: installation.version };
+      throw Error('translation_session_conflict');
+    }
     const env = { ...this.env };
     delete env.ELECTRON_RUN_AS_NODE;
     let child;

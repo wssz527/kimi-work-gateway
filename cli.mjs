@@ -1,23 +1,42 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { readConfig } from './src/config.mjs';
 import { BYOK_DNS_PORT, KimiWorkGateway, NativeByokDNS, NativeSetup, OpenAIBackend,
   copySetupToken, defaultKimiDirectory, defaultStateDirectory, nativeFlagFile,
-  inspectKimiContract, summarizeKimiContract, SubagentPolicy, SubagentRuntime, bindNativeSubagents } from './src/index.mjs';
+  inspectKimiContract, summarizeKimiContract, SubagentPolicy, SubagentRuntime, bindNativeSubagents, NativeWorkIntegration } from './src/index.mjs';
 import { readSubagentJSON } from './src/subagent-policy.mjs';
 import { PanelController } from './src/panel-controller.mjs';
 import { GatewayPanel } from './src/panel.mjs';
 import { TranslationRuntime } from './src/translation-runtime.mjs';
+import { bindNativeWorkIntegration } from './src/native-work-binding.mjs';
+import { SetupServer, readCredentials, removePanelEntry,
+  setupPaths, writePanelEntry, UPSTREAM_KEY_ENV, GATEWAY_TOKEN_ENV } from './src/setup.mjs';
+import { GatewayService, assertPersistableEnvironment, selectEnvironment, stableLauncherPath,
+  SERVICE_LABEL } from './src/service-manager.mjs';
+import { ServiceRunner, inspectRunner, requestRunner } from './src/service-runner.mjs';
+import { createNativeConnection } from './src/native-connection.mjs';
 
 const USAGE = [
   'usage: kimi-work-gateway <command> [options]',
   '',
   'commands:',
+  '  setup [--state-dir <dir>] [--config <file>] [--port <port>] [--no-open]',
+  '      first run: open a local page to save the upstream and models, then install the service',
   '  serve --config <file|-> [--instructions <file>] [--state-dir <dir>] [--kimi-dir <dir>]',
-  '      serve the configured upstream models to Kimi desktop Work',
-  '  panel --config <file> [--ui-port <port>] [--instructions <file>] [--state-dir <dir>] [--kimi-dir <dir>]',
+  '      serve models and maintain native Kimi integration; --no-native disables desktop preparation',
+  '  panel --config <file> [--ui-port <port>] [--credentials <file>] [--entry-file <file>]',
+  '        [--instructions <file>] [--state-dir <dir>] [--kimi-dir <dir>]',
   '      serve the gateway with a local web control panel (default port 3427)',
+  '  service install [--state-dir <dir>] [--config <file>] [--panel-port <port>] [--env <NAME> ...]',
+  '      install and start the current-user background service from the saved setup',
+  '  service start|stop|restart|status [--state-dir <dir>]',
+  '      control or report the background service; status prints the panel link',
+  '  service uninstall [--state-dir <dir>]',
+  '      remove only the service files this tool created; keeps config and credentials',
+  '  service-run --state-dir <dir> -- <panel arguments>',
+  '      supervised entry point used by the service definition; restarts the panel',
   '  prepare [--state-dir <dir>] [--kimi-dir <dir>] [--dns-port <port>]',
   '      install the dev.msh.team resolver; may ask for administrator rights',
   '  remove-dns [--state-dir <dir>] [--kimi-dir <dir>] [--dns-port <port>]',
@@ -118,6 +137,14 @@ function describeSubagentPolicy(summary) {
   return 'inherit';
 }
 
+// Only the state words a caller can act on, never paths or a raw bridge reply.
+function summarizeNative(connection) {
+  const pick = (value, fields) => Object.fromEntries(Object.entries(value || {})
+    .filter(([key, entry]) => fields.includes(key) && (typeof entry === 'string' || typeof entry === 'number')));
+  return { preparation: pick(connection?.status, ['state', 'reason', 'stage']),
+    desktop: pick(connection?.desktop?.inspect?.(), ['state', 'reason', 'version', 'enabled']) };
+}
+
 // Reads the policy without creating or touching anything, so `status` stays a
 // pure observer even when the file is missing or foreign.
 function readSubagentPolicy(file) {
@@ -159,7 +186,10 @@ function subagentFailure(io, action, failure) {
 
 async function serveCommand(argv, env, io, overrides = {}) {
   const panelEnabled = overrides.panel === true;
-  const flags = parseFlags(argv, ['config', 'instructions', 'state-dir', 'kimi-dir', ...(panelEnabled ? ['ui-port'] : [])], ['config']);
+  const nativeDisabled = argv.includes('--no-native');
+  const flags = parseFlags(argv.filter(value => value !== '--native' && value !== '--no-native'),
+    ['config', 'instructions', 'state-dir', 'kimi-dir',
+      ...(panelEnabled ? ['ui-port', 'credentials', 'entry-file'] : [])], ['config']);
   if (!flags || panelEnabled && flags.config === '-') {
     return usageError(io, 'kimi-work-gateway: ' + (panelEnabled ? 'panel needs --config <file>' : 'serve needs --config <file|->'));
   }
@@ -182,31 +212,76 @@ async function serveCommand(argv, env, io, overrides = {}) {
       + (failure instanceof SyntaxError ? 'not valid JSON' : failure.message) + ')');
     return 2;
   }
-  const missing = [config.upstream.apiKeyEnv, config.tokenEnv].filter(name => !env[name]);
+  // `--credentials` is how a background service starts without an interactive
+  // shell. The file only supplies the two named variables; it never becomes
+  // part of the process environment of anything else, and no value is printed.
+  let runtimeEnv = env;
+  if (flags.credentials) {
+    let credentials;
+    try { credentials = readCredentials(flags.credentials, { requirePrivate: true }); }
+    catch (failure) {
+      io.err('kimi-work-gateway: cannot read credentials file ' + flags.credentials
+        + ' (' + (failure?.message || String(failure)) + ')');
+      return 2;
+    }
+    if (!credentials) { io.err('kimi-work-gateway: credentials file ' + flags.credentials + ' is absent'); return 2; }
+    if (config.upstream.apiKeyEnv !== UPSTREAM_KEY_ENV || config.tokenEnv !== GATEWAY_TOKEN_ENV) {
+      io.err('kimi-work-gateway: credentials file needs ' + UPSTREAM_KEY_ENV + ' and ' + GATEWAY_TOKEN_ENV
+        + ' in the config; use environment variables or update the config');
+      return 2;
+    }
+    runtimeEnv = { ...env, [UPSTREAM_KEY_ENV]: credentials.upstreamApiKey, [GATEWAY_TOKEN_ENV]: credentials.gatewayToken };
+  }
+  const missing = [config.upstream.apiKeyEnv, config.tokenEnv].filter(name => !runtimeEnv[name]);
   if (missing.length) {
     for (const name of missing) io.err('kimi-work-gateway: missing environment variable ' + name);
     return 2;
   }
   let backend, gateway;
   try {
-    backend = new OpenAIBackend({ baseURL: config.upstream.baseURL, apiKey: env[config.upstream.apiKeyEnv], models: config.models });
+    backend = new OpenAIBackend({ baseURL: config.upstream.baseURL, apiKey: runtimeEnv[config.upstream.apiKeyEnv], models: config.models });
     gateway = new KimiWorkGateway({ backend, instructionsFile: flags.instructions, recordRequests: panelEnabled });
     if (config.subagents?.transport === 'native-config') gateway.beforeRequest = () => ({ status: 503, code: 'subagent_policy_initializing' });
   } catch (failure) {
     io.err('kimi-work-gateway: invalid config (' + failure.message + ')');
     return 2;
   }
-  let dns, policy, panel, controller;
+  let dns, policy, panel, controller, nativeConnection;
   const statusFile = path.join(stateDir, 'status.json');
   const instanceId = crypto.randomUUID();
   const hostsMode = config.dns.enabled && (overrides.platform || process.platform) === 'win32';
   let published = false;
+  let entryPublished = false;
+  // The native connection is built only after the listener exists: a duplicate
+  // serve must not open a desktop bridge, touch Kimi or claim the import intent.
+  // Any explicit native override (integration, context, sync, connection) means
+  // the caller owns that path, so no real desktop/onboarding is created.
+  const createNative = overrides.createNativeConnection || createNativeConnection;
+  const nativeOwned = 'nativeConnection' in overrides || 'nativeIntegration' in overrides
+    || 'nativeContext' in overrides || 'syncNative' in overrides
+    || typeof overrides.createNativeConnection === 'function';
+  const buildNative = () => createNative({ stateDir, kimiDir, gateway, config, env: runtimeEnv });
   try {
     let url;
-    try { url = await gateway.configure({ key: env[config.tokenEnv], port: config.port }); }
+    try { url = await gateway.configure({ key: runtimeEnv[config.tokenEnv], port: config.port }); }
     catch (failure) {
       io.err('kimi-work-gateway: cannot listen on 127.0.0.1:' + config.port + ' (' + failure.message + ')');
       return 3;
+    }
+    // A real connection starts preparation right away, but only off the request
+    // path: a desktop prompt or a missing Kimi must never fail `serve`.
+    const deferNative = overrides.deferNative === true;
+    if (nativeDisabled || overrides.nativeConnection === false) nativeConnection = null;
+    else if (overrides.nativeConnection) nativeConnection = overrides.nativeConnection;
+    else if (nativeOwned && typeof overrides.createNativeConnection !== 'function') nativeConnection = null;
+    else {
+      try { nativeConnection = buildNative(); }
+      catch (failure) {
+        // A missing desktop bridge must not hide the models from a plain serve;
+        // the panel reports the native preparation state separately.
+        io.err('kimi-work-gateway: native connection unavailable (' + (failure?.message || String(failure)) + ')');
+        nativeConnection = null;
+      }
     }
     if (config.dns.enabled && !hostsMode) {
       dns = new (overrides.NativeByokDNS || NativeByokDNS)();
@@ -223,9 +298,19 @@ async function serveCommand(argv, env, io, overrides = {}) {
     let subagents;
     try {
       policy = new (overrides.SubagentPolicy || SubagentPolicy)({ stateDir, kimiDir });
-      const configured = policy.configure(config.subagents, backend.models);
+      policy.configure(config.subagents, backend.models);
+      gateway.workBinding = await bindNativeWorkIntegration({ stateDir, kimiDir, gateway, backend, policy,
+        deferInitial: overrides.deferInitial !== false,
+        integration: overrides.nativeIntegration || new (overrides.NativeWorkIntegration || NativeWorkIntegration)({ stateDir, kimiDir,
+          sourceID: 'gateway', getContext: overrides.nativeContext,
+          syncNative: overrides.syncNative || nativeConnection?.syncNative }),
+        onChange: value => {
+          const current = readStateFile(statusFile)?.value;
+          if (current?.instanceId === instanceId) writeStatus(statusFile, { ...current, integration: value,
+            subagents: summarizeSubagentPolicy(policy.value) });
+        } });
       bindNativeSubagents({ policy, gateway, stateDir, kimiDir });
-      subagents = summarizeSubagentPolicy(configured);
+      subagents = summarizeSubagentPolicy(policy.value);
     } catch (failure) {
       io.err('kimi-work-gateway: cannot apply the subagent policy (' + (failure?.message || String(failure)) + ')');
       return 3;
@@ -233,7 +318,8 @@ async function serveCommand(argv, env, io, overrides = {}) {
     if (panelEnabled) {
       try {
         controller = new (overrides.PanelController || PanelController)({
-          configFile: flags.config, config, gateway, backend, stateDir, kimiDir, policy, env,
+          configFile: flags.config, config, gateway, backend, stateDir, kimiDir, policy, env: runtimeEnv,
+          nativeConnection,
           onPolicy: value => {
             const current = readStateFile(statusFile)?.value;
             if (current?.instanceId !== instanceId) return;
@@ -251,13 +337,44 @@ async function serveCommand(argv, env, io, overrides = {}) {
     try {
       writeStatus(statusFile, { pid: process.pid, instanceId, url, models: backend.models.length,
         dns: { enabled: Boolean(dns), port: config.dns.port, ...(hostsMode ? { mode: 'hosts' } : {}) },
-        subagents, ...(panel ? { panel: { url: panel.url } } : {}), at: new Date().toISOString() });
+        subagents, integration: gateway.workBinding?.status,
+        ...(nativeConnection ? { native: summarizeNative(nativeConnection) } : {}),
+        ...(panel ? { panel: { url: panel.url } } : {}), at: new Date().toISOString() });
       published = true;
     } catch { io.err('kimi-work-gateway: cannot write ' + statusFile); return 3; }
+    // A background service has no terminal, so the panel link is written to a
+    // private file that `service status` can read. It contains the session key
+    // and is removed again on exit.
+    if (panel && flags['entry-file']) {
+      try {
+        writePanelEntry(flags['entry-file'], { url: panel.url, entryURL: panel.entryURL, pid: process.pid });
+        entryPublished = true;
+      } catch (failure) {
+        io.err('kimi-work-gateway: cannot write panel entry (' + (failure?.message || String(failure)) + ')');
+      }
+    }
+    // Publish the control surface before the first system prompt. Cancellation
+    // is persisted by onboarding and requires an explicit retry from the panel.
+    if (nativeConnection && !deferNative) {
+      void Promise.resolve(nativeConnection.ensure())
+        .then(value => {
+          const current = readStateFile(statusFile)?.value;
+          if (current?.instanceId === instanceId) {
+            try { writeStatus(statusFile, { ...current, native: summarizeNative(nativeConnection) }); } catch {}
+          }
+          return value;
+        })
+        .catch(() => {});
+    }
     io.out(url);
     io.out(hostsMode ? 'dns provided by Windows hosts' : dns ? 'dns listening on port ' + config.dns.port : 'dns disabled');
     io.out('subagents ' + describeSubagentPolicy(subagents));
-    if (panel) io.out('panel ' + panel.entryURL);
+    // When the link goes to the entry file, stdout is a log: printing the
+    // session key there would put it in the service log on every start.
+    if (panel) {
+      io.out(flags['entry-file'] ? 'panel ' + panel.url + ' (link in ' + flags['entry-file'] + ')'
+        : 'panel ' + panel.entryURL);
+    }
     if (overrides.waitForShutdown) await overrides.waitForShutdown();
     else await new Promise(resolve => {
       const stop = () => {
@@ -269,11 +386,18 @@ async function serveCommand(argv, env, io, overrides = {}) {
       process.once('SIGTERM', stop);
     });
   } finally {
+    // close() on the native connection can wait on a desktop bridge; shutdown
+    // must not hang on it, and nothing here ends Kimi or clears an intent.
+    const bounded = (task, ms) => Promise.race([Promise.resolve().then(task),
+      new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); })]);
     for (const [name, stop] of [['panel', () => panel?.stop()], ['panel controller', () => controller?.close()],
+      ['native connection', () => bounded(() => nativeConnection?.close(), 3000)],
+      ['native integration', () => bounded(() => gateway.workBinding?.close(), 3000)],
       ['dns', () => dns?.stop()], ['gateway', () => gateway.stop()]]) {
       try { await stop(); } catch { io.err('kimi-work-gateway: cannot stop ' + name); }
     }
     if (published && readStateFile(statusFile)?.value?.instanceId === instanceId) fs.rmSync(statusFile, { force: true });
+    if (entryPublished && flags['entry-file']) removePanelEntry(flags['entry-file']);
     // Restoring inheritance is best effort and never blocks shutdown; close()
     // only rewrites the file when this process still owns it.
     try { policy?.close(); } catch (failure) { io.err('kimi-work-gateway: cannot restore the subagent policy (' + (failure?.message || String(failure)) + ')'); }
@@ -445,11 +569,231 @@ async function updateCommand(command, argv, env, io, overrides) {
   }
 }
 
+// setup: 0 saved (whether the service step succeeded is reported, not fatal),
+// 2 an unusable argument or existing file, 3 the page or the service failed.
+// service: 0 in the desired state, 3 refused or failed.
+function serviceFailure(io, action, failure) {
+  const code = /^[a-z][a-z0-9_-]{1,80}$/.test(failure?.message) ? failure.message : 'service_failed';
+  io.err('kimi-work-gateway: service ' + action + ' failed (' + code + ')');
+  return 3;
+}
+
+function serviceFromFlags(flags, env, overrides) {
+  const Service = overrides.GatewayService || GatewayService;
+  const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
+  return new Service({ stateDir, env, platform: overrides.platform || process.platform,
+    ...(flags.config ? { configPath: path.resolve(flags.config) } : {}),
+    ...(flags['panel-port'] ? { panelPort: Number(flags['panel-port']) } : {}),
+    ...(flags['kimi-dir'] ? { kimiDir: flags['kimi-dir'] } : {}),
+    ...(flags['launcher'] ? { launcherPath: flags['launcher'] } : {}),
+    ...(overrides.nodePath ? { nodePath: overrides.nodePath } : {}),
+    ...(overrides.serviceRunner ? { runner: overrides.serviceRunner } : {}),
+    ...(overrides.home ? { home: overrides.home } : {}),
+    ...(overrides.serviceVersion ? { version: overrides.serviceVersion } : {}) });
+}
+
+function serviceUsage(io, message) {
+  return usageError(io, 'kimi-work-gateway: ' + message);
+}
+
+async function serviceCommand(argv, env, io, overrides = {}) {
+  const [action, ...rest] = argv;
+  const allowed = { install: ['state-dir', 'config', 'panel-port', 'kimi-dir', 'launcher'],
+    start: ['state-dir', 'config'], stop: ['state-dir', 'config'], restart: ['state-dir', 'config'],
+    status: ['state-dir', 'config'], uninstall: ['state-dir', 'config'] };
+  if (!action || !allowed[action]) return serviceUsage(io, 'service needs install, start, stop, restart, status or uninstall');
+  // --env selects variables to persist; it is parsed separately because it can
+  // repeat and its value must never be mistaken for a flag value.
+  const names = [];
+  const positional = [];
+  for (let at = 0; at < rest.length; at++) {
+    if (rest[at] === '--env') {
+      if (action !== 'install' || at + 1 >= rest.length) return serviceUsage(io, 'service --env needs a variable name');
+      names.push(rest[++at]);
+    } else positional.push(rest[at]);
+  }
+  const flags = parseFlags(positional, allowed[action]);
+  if (!flags) return serviceUsage(io, 'invalid arguments for service ' + action);
+  const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
+  let service;
+  try { service = serviceFromFlags({ ...flags, ...(flags['panel-port'] ? {} : {}) }, env, overrides); }
+  catch (failure) { return serviceFailure(io, action, failure); }
+  const runnerRequest = overrides.requestRunner || requestRunner;
+  const runnerState = () => (overrides.inspectRunner || inspectRunner)({ stateDir,
+    platform: overrides.platform || process.platform });
+  const output = outcome => io.out(JSON.stringify({ ...outcome,
+    platform: overrides.platform || process.platform, label: SERVICE_LABEL }));
+  try {
+    if (action === 'install') {
+      const environment = selectEnvironment(env, assertPersistableEnvironment(names));
+      output(await service.install({ environment }));
+      return 0;
+    }
+    if (action === 'status') {
+      const result = service.status();
+      io.out(JSON.stringify({ ...result, runner: runnerState() }));
+      return result.state === 'conflict' ? 3 : 0;
+    }
+    if (['restart', 'stop', 'uninstall'].includes(action)) {
+      const runner = runnerState();
+      if (runner.runnerAlive || ['running', 'starting'].includes(runner.state)) {
+        const outcome = await runnerRequest({ stateDir, action: action === 'uninstall' ? 'stop' : action,
+          ...(action === 'uninstall' ? { timeoutMs: 20000 } : {}) });
+        if (action !== 'uninstall' || !['stopped', 'absent'].includes(outcome.state)) {
+          output({ ...outcome, supervised: true });
+          return 0;
+        }
+        output(await service.uninstall());
+        return 0;
+      }
+      const current = await service.status();
+      if (!['stopped', 'not-installed'].includes(current.state)) {
+        output({ state: 'waiting', reason: 'runner_unavailable' });
+        return 0;
+      }
+      if (action === 'restart') output(await service.start());
+      else if (action === 'stop') output({ state: 'stopped' });
+      else output(await service.uninstall());
+      return 0;
+    }
+    output(await service[action]());
+    return 0;
+  } catch (failure) { return serviceFailure(io, action, failure); }
+}
+
+// The runner entry point used by the service definition. It keeps the panel
+// child alive and exists so a restart can wait for a quiet moment instead of
+// killing a live conversation.
+async function serviceRunCommand(argv, env, io, overrides = {}) {
+  const separator = argv.indexOf('--');
+  if (separator < 0) return usageError(io, 'kimi-work-gateway: service-run needs -- <panel arguments>');
+  const flags = parseFlags(argv.slice(0, separator), ['state-dir', 'log', 'runner']);
+  if (!flags) return usageError(io, 'kimi-work-gateway: invalid arguments for service-run');
+  const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
+  const Runner = overrides.ServiceRunner || ServiceRunner;
+  const launcher = overrides.serviceLauncher || process.argv[1] || stableLauncher();
+  const runner = new Runner({ stateDir, launcherPath: launcher, nodePath: overrides.nodePath || process.execPath,
+    argv: argv.slice(separator + 1), env, platform: overrides.platform || process.platform,
+    ...(flags.log ? { logFile: flags.log } : {}),
+    ...(overrides.runnerSpawn ? { spawnImpl: overrides.runnerSpawn } : {}),
+    ...(overrides.runnerFetch ? { fetchImpl: overrides.runnerFetch } : {}),
+    ...(overrides.runnerTiming || {}) });
+  return runner.run();
+}
+
+function stableLauncher() {
+  try { return stableLauncherPath({ env: process.env }); } catch { return process.argv[1]; }
+}
+
+function openInBrowser(url, { platform = process.platform, run: exec = null } = {}) {
+  try {
+    if (exec) { exec(url); return true; }
+    const [bin, args] = platform === 'darwin' ? ['/usr/bin/open', [url]]
+      : platform === 'win32' ? ['cmd', ['/c', 'start', '""', url]] : ['xdg-open', [url]];
+    const child = spawn(bin, args, { stdio: 'ignore', detached: true, windowsHide: true });
+    child.on('error', () => {});
+    child.unref();
+    return true;
+  } catch { return false; }
+}
+
+// The page is the only interactive step: it collects the upstream, the key and
+// the model declarations once, and the command returns as soon as the save
+// succeeds. Nothing secret is echoed; the printed link carries the one-run
+// session key and its own filename is the only hint that it exists.
+async function setupCommand(argv, env, io, overrides = {}) {
+  const noOpen = argv.includes('--no-open');
+  const flags = parseFlags(argv.filter(value => value !== '--no-open'), ['state-dir', 'config', 'port'], []);
+  if (!flags) return usageError(io, 'kimi-work-gateway: invalid arguments for setup');
+  const stateDir = path.resolve(flags['state-dir'] || defaultStateDirectory());
+  const paths = setupPaths({ stateDir, ...(flags.config ? { configPath: flags.config } : {}) });
+  const port = flags.port === undefined ? 0 : Number(flags.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    return usageError(io, 'kimi-work-gateway: --port must be an integer from 0 to 65535');
+  }
+  const platform = overrides.platform || process.platform;
+  let finish;
+  const saved = new Promise(resolve => { finish = resolve; });
+  const Server = overrides.SetupServer || SetupServer;
+  // The page installs the service right after saving when its checkbox is on.
+  // This is the same installer `service install` uses, so both paths produce one
+  // definition; on a platform without a service it reports "unavailable".
+  const install = overrides.installService ?? (async () => {
+    const Service = overrides.GatewayService || GatewayService;
+    const service = new Service({ stateDir: paths.stateDir, configPath: paths.config, env,
+      platform, ...(overrides.serviceRunner ? { runner: overrides.serviceRunner } : {}) });
+    const installed = await service.install({ environment: {} });
+    if (installed.state !== 'unchanged') return installed;
+    const current = (overrides.inspectRunner || inspectRunner)({ stateDir: paths.stateDir });
+    if (current.runnerAlive) {
+      const restarted = await (overrides.requestRunner || requestRunner)({ stateDir: paths.stateDir, action: 'restart' });
+      return restarted.state === 'restarted' ? { ...installed, state: 'started', needsFreshEntry: true }
+        : { state: 'waiting', reason: restarted.reason || 'runner_waiting', needsFreshEntry: true };
+    }
+    if (typeof service.start !== 'function') return installed;
+    const started = await service.start();
+    if (started.state !== 'started') return { state: 'waiting', reason: 'runner_unavailable', needsFreshEntry: true };
+    return { ...installed, state: 'started', needsFreshEntry: true };
+  });
+  let server, savedAny = false;
+  try {
+    server = new Server({ stateDir, configPath: paths.config, platform, installService: install,
+      ...(overrides.panelWaitMs === undefined && typeof overrides.SetupServer === 'function'
+        ? { panelWaitMs: 0 } : { ...(overrides.panelWaitMs === undefined ? {} : { panelWaitMs: overrides.panelWaitMs }) }),
+      logger: (...entry) => { if (overrides.verbose) io.err('setup ' + entry.map(String).join(' ')); },
+      onSaved: result => {
+        savedAny = true;
+        if (['failed', 'waiting'].includes(result.service?.state) || result.panel?.state === 'waiting') return;
+        finish(result);
+      } });
+    const entry = await server.start({ port });
+    io.out('setup ' + entry);
+    io.out('state ' + paths.stateDir);
+    if (noOpen || overrides.openBrowser === false) io.out('open the link above in a browser to finish setup');
+    else openInBrowser(entry, { platform, run: overrides.openBrowser });
+  } catch (failure) {
+    io.err('kimi-work-gateway: cannot start setup (' + (failure?.message || String(failure)) + ')');
+    try { await server?.stop(); } catch {}
+    return 3;
+  }
+  const stop = () => finish(null);
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  let result;
+  try { result = await saved; }
+  finally {
+    process.off('SIGINT', stop);
+    process.off('SIGTERM', stop);
+    try { await server.stop(); } catch {}
+  }
+  if (!result) {
+    io.out(savedAny ? 'setup closed; saved configuration kept' : 'setup cancelled; nothing changed');
+    return 0;
+  }
+  io.out('saved ' + result.state.configuration.file);
+  io.out('models ' + result.state.models.length + ', port ' + result.gateway.port);
+  if (['installed', 'unchanged', 'started'].includes(result.service?.state)) {
+    io.out('service ' + result.service.state + '; starts automatically at login');
+  } else if (result.service?.state === 'failed') {
+    io.out('service failed (' + result.service.reason + ')');
+    io.out('next: kimi-work-gateway service install');
+  } else {
+    io.out('next: kimi-work-gateway service install');
+  }
+  if (result.panel?.state === 'ready') io.out('panel ' + result.panel.entryURL);
+  else if (result.panel?.state === 'waiting') io.out('panel waiting; run: kimi-work-gateway service status');
+  else io.out('panel not started; run: kimi-work-gateway panel --config ' + paths.config + ' --credentials ' + paths.credentials);
+  return 0;
+}
+
 export async function run(argv, env = process.env, io, overrides = {}) {
   const sink = streams(io);
   const [command, ...rest] = argv || [];
   if (!command || command === 'help' || command === '--help' || command === '-h') { sink.out(USAGE); return 0; }
   switch (command) {
+    case 'setup': return setupCommand(rest, env, sink, overrides);
+    case 'service': return serviceCommand(rest, env, sink, overrides);
+    case 'service-run': return serviceRunCommand(rest, env, sink, overrides);
     case 'serve': return serveCommand(rest, env, sink, overrides);
     case 'panel': return serveCommand(rest, env, sink, { ...overrides, panel: true });
     case 'prepare': return nativeCommand('prepare', rest, env, sink, overrides);

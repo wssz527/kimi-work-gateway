@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<title>Kimi Work 网关 · 首次设置</title>
+<style nonce="__SETUP_NONCE__">
+:root {
+  color-scheme: light;
+  --bg: #f4f6f8; --surface: #ffffff; --sunk: #f7f8fa; --hover: #f1f4f7;
+  --rule: #e2e6ec; --rule-strong: #cfd6df; --rule-input: #c4ccd7;
+  --ink: #17202b; --ink-2: #45505e; --ink-3: #626d7c;
+  --blue: #1a63bd; --blue-hover: #17589f; --blue-soft: #e8f0fb; --blue-rule: #bcd6f5;
+  --ok: #1f7a4d; --ok-soft: #e6f4ec; --warn: #8a5708; --warn-soft: #fdf3e0;
+  --bad: #b02a2a; --bad-soft: #fbeaea;
+  --focus: #1a63bd; --r-sm: 6px; --r-md: 8px; --r-lg: 12px;
+  --shadow-1: 0 1px 2px rgba(23,32,43,.06), 0 1px 1px rgba(23,32,43,.04);
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+        "Microsoft YaHei", "Noto Sans SC", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #14181d; --surface: #1a1f26; --sunk: #161b21; --hover: #20262e;
+    --rule: #2a323b; --rule-strong: #3a444f; --rule-input: #4a5563;
+    --ink: #e8edf4; --ink-2: #b3bdc9; --ink-3: #94a0ad;
+    --blue: #7fb2f0; --blue-hover: #a3c8f5; --blue-soft: #1c2a3c; --blue-rule: #34506f;
+    --ok: #6fce9c; --ok-soft: #16281f; --warn: #e6b566; --warn-soft: #2b2314;
+    --bad: #f09a9a; --bad-soft: #2c1a1a; --focus: #7fb2f0;
+    --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.6 var(--ui);
+  -webkit-font-smoothing: antialiased; padding: 40px 20px 72px; }
+.wrap { max-width: 880px; margin: 0 auto; }
+header.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+h1 { font-size: 21px; line-height: 1.3; margin: 0 0 6px; letter-spacing: -0.01em; }
+.sub { margin: 0; color: var(--ink-3); font-size: 13px; }
+.pill { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border: 1px solid var(--rule); border-radius: 999px; background: var(--surface); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rule-strong); }
+.dot[data-tone="ok"] { background: var(--ok); }
+.dot[data-tone="warn"] { background: var(--warn); }
+.dot[data-tone="bad"] { background: var(--bad); }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1); padding: 22px 24px; margin-bottom: 16px; }
+.card > h2 { font-size: 15px; margin: 0 0 4px; }
+.card > .hint { margin: 0 0 18px; color: var(--ink-3); font-size: 12.5px; }
+label.field { display: block; margin-bottom: 14px; }
+label.field > span.label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 5px; }
+label.field > span.note { display: block; margin-top: 5px; color: var(--ink-3); font-size: 12px; }
+input[type=text], input[type=password], input[type=number], select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--rule-input); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 13.5px; }
+input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 1px; }
+input.mono, .mono { font-family: var(--mono); font-size: 12.5px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 620px) { .row, .row-3 { grid-template-columns: 1fr; } }
+.checks { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 4px 0 2px; }
+.checks--model { margin-bottom: 14px; }
+label.check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+label.check input { width: 15px; height: 15px; accent-color: var(--blue); }
+.key-row { display: flex; gap: 8px; }
+.key-row input { flex: 1 1 auto; }
+.key-toggle { flex: none; }
+.field--end { align-self: end; }
+.hint--tight { margin: 8px 0 0; }
+.save-hint { color: var(--ink-3); font-size: 12.5px; }
+.btn-link { display: inline-flex; align-items: center; gap: 8px; background: var(--blue);
+  border: 1px solid var(--blue); color: #fff; font-weight: 600; font-size: 13.5px;
+  padding: 9px 20px; border-radius: var(--r-sm); text-decoration: none; }
+.btn-link:hover { background: var(--blue-hover); border-color: var(--blue-hover); }
+.btn-link[hidden], .hint[hidden] { display: none; }
+#panel-actions { margin: 4px 0 18px; }
+.model { border: 1px solid var(--rule); border-radius: var(--r-md); padding: 16px 16px 4px; margin-bottom: 12px; background: var(--sunk); }
+.model__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.model__title { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.model__derived { font-size: 12px; color: var(--ink-3); }
+.model__derived code { font-family: var(--mono); }
+.actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+button { font: inherit; font-size: 13.5px; border-radius: var(--r-sm); border: 1px solid var(--rule-input);
+  background: var(--surface); color: var(--ink); padding: 8px 15px; cursor: pointer; }
+button:hover { background: var(--hover); }
+button.primary { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; padding: 9px 20px; }
+button.primary:hover { background: var(--blue-hover); border-color: var(--blue-hover); }
+button.ghost { border-color: transparent; background: transparent; color: var(--ink-3); padding: 4px 8px; font-size: 12.5px; }
+button.ghost:hover { background: var(--hover); color: var(--ink); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .55; cursor: not-allowed; }
+.msg { margin-top: 16px; padding: 11px 14px; border-radius: var(--r-md); font-size: 13px; display: none; }
+.msg[data-tone="ok"] { display: block; background: var(--ok-soft); border: 1px solid var(--ok); color: var(--ok); }
+.msg[data-tone="warn"] { display: block; background: var(--warn-soft); border: 1px solid var(--warn); color: var(--warn); }
+.msg[data-tone="bad"] { display: block; background: var(--bad-soft); border: 1px solid var(--bad); color: var(--bad); }
+.msg ul { margin: 6px 0 0; padding-left: 18px; }
+.next { border-top: 1px solid var(--rule); margin-top: 18px; padding-top: 16px; }
+.next h3 { font-size: 13px; margin: 0 0 8px; color: var(--ink-2); }
+.next ol { margin: 0; padding-left: 20px; color: var(--ink-2); font-size: 13px; }
+.next li { margin-bottom: 6px; }
+code.block { display: block; background: var(--sunk); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  padding: 9px 11px; margin: 6px 0 0; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2);
+  overflow-x: auto; white-space: pre; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 12.5px; margin: 0; }
+.facts dt { color: var(--ink-3); }
+.facts dd { margin: 0; color: var(--ink-2); font-family: var(--mono); word-break: break-all; }
+hr.sep { border: 0; border-top: 1px solid var(--rule); margin: 18px 0; }
+footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: center; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Kimi Work 网关 · 首次设置</h1>
+      <p class="sub">填一次上游地址、密钥与模型声明，保存到本机用户目录。之后由后台服务维持运行。</p>
+    </div>
+    <span class="pill"><span class="dot" id="state-dot"></span><span id="state-text">读取中</span></span>
+  </header>
+
+  <form id="form" novalidate>
+    <section class="card" aria-labelledby="h-upstream">
+      <h2 id="h-upstream">1 · 上游服务</h2>
+      <p class="hint">填写兼容 OpenAI 接口的服务地址与密钥。密钥只写入本机用户目录的私有凭据文件，不回显、不写日志。</p>
+      <label class="field" for="baseURL">
+        <span class="label">Base URL</span>
+        <input id="baseURL" class="mono" type="text" name="baseURL" autocomplete="off" spellcheck="false"
+               placeholder="https://api.example.com/v1" required>
+        <span class="note">需使用 HTTPS；仅本机服务可用 HTTP。不要包含账号密码、查询参数或 #片段。</span>
+      </label>
+      <label class="field" for="apiKey">
+        <span class="label">API Key</span>
+        <div class="key-row">
+          <input id="apiKey" class="mono" type="password" name="apiKey" autocomplete="off" spellcheck="false"
+                 placeholder="sk-…" required>
+          <button type="button" id="toggle-key" class="key-toggle">显示</button>
+        </div>
+        <span class="note" id="key-state">不会显示已保存的值；留空表示保持现有密钥。</span>
+      </label>
+    </section>
+
+    <section class="card" aria-labelledby="h-models">
+      <h2 id="h-models">2 · 模型声明</h2>
+      <p class="hint">按上游真实能力逐条声明。协议决定 Kimi 调用哪个接口：ID 最后一段以 <code class="mono">kimi-</code> 开头的模型必须用 Chat Completions，其余用 Responses。工具、推理档位与图片输入只有上游确实支持时才勾选。</p>
+      <div id="models"></div>
+      <div class="actions">
+        <button type="button" id="add-model">添加模型</button>
+        <span class="model__derived">最多 32 个模型</span>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-local">
+      <h2 id="h-local">3 · 本机网关</h2>
+      <p class="hint">网关只监听 127.0.0.1。默认端口 3426 与 Kimi 的“第三方模型网关”地址一致。</p>
+      <div class="row">
+        <label class="field" for="port">
+          <span class="label">网关端口</span>
+          <input id="port" type="number" name="port" min="1024" max="65535" step="1" value="3426">
+        </label>
+        <div class="field field--end">
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="dns" checked> 启用本机 DNS 解析（macOS 需要一次管理员授权）</label>
+          </div>
+        </div>
+      </div>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="installService" checked> 保存后安装为当前用户的后台服务并立即启动（不支持的平台会提示手动启动）</label>
+      </div>
+      <p class="hint hint--tight">后台服务使用本次安装的稳定启动入口，切换新版本后只需重启服务即生效；卸载只删除本工具生成的服务文件。</p>
+    </section>
+
+    <div class="actions">
+      <button type="submit" class="primary" id="save">保存并继续</button>
+      <button type="button" class="ghost" id="reload">重新读取已保存设置</button>
+      <span id="save-hint" class="save-hint"></span>
+    </div>
+    <div class="msg" id="msg" role="status" aria-live="polite"></div>
+  </form>
+
+  <section class="card" id="done-card" hidden aria-labelledby="h-done">
+    <h2 id="h-done">已保存</h2>
+    <p class="hint" id="done-hint"></p>
+    <div class="actions" id="panel-actions">
+      <a id="open-panel" class="btn-link" href="#" target="_blank" rel="noopener noreferrer" hidden>打开模型控制面板</a>
+      <p class="hint hint--tight" id="panel-waiting" hidden></p>
+    </div>
+    <dl class="facts" id="facts"></dl>
+    <div class="next">
+      <h3>接下来</h3>
+      <ol id="next-steps"></ol>
+    </div>
+  </section>
+
+  <footer>设置页仅在本机回环地址上临时提供，完成或关闭终端后不可再访问。</footer>
+</div>
+
+<script nonce="__SETUP_NONCE__">
+(function () {
+  'use strict';
+  var KEY_STORE = 'kimi-work-gateway.setup.key';
+  var MESSAGES = {
+    unauthorized: '设置页会话已失效，请从终端输出的新链接重新打开。',
+    origin_refused: '请求来源不匹配，请从本机设置页操作。',
+    too_many_attempts: '尝试次数过多，请重新启动设置命令。',
+    json_required: '请求格式无效，请刷新页面重试。',
+    invalid_json: '请求格式无效，请刷新页面重试。',
+    request_too_large: '提交内容过大，请减少模型数量后重试。',
+    setup_busy: '上一次保存仍在进行，请稍候。',
+    invalid_setup: '表单内容不完整。',
+    invalid_base_url: 'Base URL 需使用 HTTPS（本机可用 HTTP），且不能包含凭证、查询参数或片段。',
+    invalid_api_key: 'API Key 为空或包含不可用的字符。',
+    invalid_models: '模型声明无效：请检查 ID、上下文长度与勾选项。',
+    protocol_conflict: '模型 ID 最后一段以 kimi- 开头时必须使用 Chat Completions，其余必须使用 Responses。',
+    invalid_port: '网关端口需为 1024–65535 之间的整数。',
+    invalid_config: '配置组合无效，请检查端口与模型声明。',
+    setup_file_conflict: '目标路径上已有不是本工具创建的文件，已停止写入。请先检查该文件。',
+    setup_file_owner_conflict: '目标文件属于其他用户，已停止写入。',
+    setup_file_unreadable: '无法读取目标文件，请检查权限。',
+    setup_directory_conflict: '状态目录被符号链接或非目录占用，已停止写入。',
+    setup_config_conflict: '已存在手工编写的配置文件，本次未覆盖。请保留或移动该文件后重试。',
+    setup_credentials_conflict: '已存在不是本工具创建的凭据文件，本次未覆盖。请检查后重试。',
+    setup_write_failed: '写入本机文件失败，请检查用户目录权限。',
+    service_unavailable: '当前平台暂不支持后台服务。',
+    service_install_failed: '设置已保存，但后台服务安装失败。可在终端执行 service status 查看。',
+    setup_failed: '保存失败，请检查终端输出。'
+  };
+  var derived = function (id) {
+    var trimmed = String(id || '').trim();
+    if (!trimmed) return null;
+    var last = trimmed.slice(trimmed.lastIndexOf('/') + 1).toLowerCase();
+    return last.indexOf('kimi-') === 0 ? 'chat' : 'responses';
+  };
+  var key = '';
+  var state = null;
+  var saving = false;
+  var autoOpened = false;
+  var savedShown = false;
+  var pollTimer = null;
+  var pollAttempts = 0;
+  var POLL_MS = 900;
+  var POLL_MAX = 40;
+  var openPanel = function (url) { try { window.open(url, '_blank', 'noopener'); } catch (error) {} };
+
+  function el(id) { return document.getElementById(id); }
+  function esc(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function api(pathname, init) {
+    var options = init || {};
+    var headers = { Authorization: 'Bearer ' + key };
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (options.method === 'POST') headers.Origin = location.origin;
+    return fetch(pathname, { method: options.method || 'GET', headers: headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      cache: 'no-store', redirect: 'error' }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (payload) {
+        if (!response.ok) {
+          var code = payload && payload.error && payload.error.code || 'setup_failed';
+          var error = new Error(code);
+          error.code = code;
+          throw error;
+        }
+        return payload;
+      });
+    });
+  }
+  function say(tone, text, extra) {
+    var box = el('msg');
+    box.setAttribute('data-tone', tone);
+    box.innerHTML = esc(text) + (extra ? extra : '');
+  }
+  function clearMessage() { el('msg').removeAttribute('data-tone'); el('msg').textContent = ''; }
+  function describe(error) {
+    return MESSAGES[error && error.code] || MESSAGES[error && error.message] || MESSAGES.setup_failed;
+  }
+
+  function modelRow(model) {
+    var value = model || { id: '', protocol: '', contextWindow: 131072, tools: true };
+    var node = document.createElement('div');
+    node.className = 'model';
+    node.innerHTML = ''
+      + '<div class="model__head"><span class="model__title">模型</span>'
+      + '<button type="button" class="ghost danger" data-act="remove">移除</button></div>'
+      + '<label class="field"><span class="label">模型 ID</span>'
+      + '<input class="mono" data-f="id" type="text" spellcheck="false" autocomplete="off" value="' + esc(value.id) + '" placeholder="deepseek-v4-1-flash"></label>'
+      + '<div class="row"><label class="field"><span class="label">显示名称（可选）</span>'
+      + '<input data-f="name" type="text" autocomplete="off" value="' + esc(value.name || '') + '" placeholder="DeepSeek V4.1 Flash"></label>'
+      + '<label class="field"><span class="label">接口协议</span>'
+      + '<select data-f="protocol">'
+      + '<option value="">请选择…</option>'
+      + '<option value="chat"' + (value.protocol === 'chat' ? ' selected' : '') + '>Chat Completions</option>'
+      + '<option value="responses"' + (value.protocol === 'responses' ? ' selected' : '') + '>Responses</option>'
+      + '</select><span class="note" data-derived></span></label></div>'
+      + '<div class="row-3">'
+      + '<label class="field"><span class="label">上下文长度</span>'
+      + '<input data-f="contextWindow" type="number" min="1" step="1" value="' + esc(value.contextWindow) + '"></label>'
+      + '<label class="field"><span class="label">最大输出（可选）</span>'
+      + '<input data-f="maxOutputTokens" type="number" min="1" step="1" value="' + esc(value.maxOutputTokens === undefined ? '' : value.maxOutputTokens) + '"></label>'
+      + '<label class="field"><span class="label">思考档位（可选）</span>'
+      + '<input class="mono" data-f="reasoningEfforts" type="text" spellcheck="false" autocomplete="off" value="' + esc((value.reasoningEfforts || []).join(', ')) + '" placeholder="low, high"></label></div>'
+      + '<div class="checks checks--model">'
+      + '<label class="check"><input type="checkbox" data-f="tools"' + (value.tools ? ' checked' : '') + '> 支持工具调用</label>'
+      + '<label class="check"><input type="checkbox" data-f="reasoning"' + (value.reasoning ? ' checked' : '') + '> 支持推理</label>'
+      + '<label class="check"><input type="checkbox" data-f="image"' + ((value.inputModalities || []).indexOf('image') >= 0 ? ' checked' : '') + '> 支持图片输入</label>'
+      + '</div>';
+    node.querySelector('[data-act="remove"]').addEventListener('click', function () {
+      var list = el('models');
+      if (list.children.length <= 1) { say('warn', '至少保留一个模型。'); return; }
+      node.remove();
+    });
+    var idInput = node.querySelector('[data-f="id"]');
+    var update = function () {
+      var expected = derived(idInput.value);
+      var hint = node.querySelector('[data-derived]');
+      hint.textContent = expected
+        ? '此 ID 需使用 ' + (expected === 'chat' ? 'Chat Completions' : 'Responses') + ' 协议'
+        : '协议按模型 ID 推导，必须手工确认';
+    };
+    idInput.addEventListener('input', update);
+    update();
+    return node;
+  }
+
+  function addModel(model) {
+    el('models').appendChild(modelRow(model));
+  }
+
+  function readModels() {
+    return Array.prototype.map.call(el('models').children, function (node) {
+      var read = function (name) { return node.querySelector('[data-f="' + name + '"]'); };
+      var efforts = String(read('reasoningEfforts').value || '').split(',').map(function (item) {
+        return item.trim();
+      }).filter(Boolean);
+      var maxOutput = read('maxOutputTokens').value.trim();
+      var model = {
+        id: read('id').value.trim(),
+        protocol: read('protocol').value,
+        contextWindow: Number(read('contextWindow').value),
+        tools: read('tools').checked,
+        reasoning: read('reasoning').checked,
+        inputModalities: read('image').checked ? ['text', 'image'] : ['text'],
+      };
+      var name = read('name').value.trim();
+      if (name) model.name = name;
+      if (maxOutput) model.maxOutputTokens = Number(maxOutput);
+      if (efforts.length) model.reasoningEfforts = efforts;
+      return model;
+    });
+  }
+
+  function fill(stateValue, { keepKey = false } = {}) {
+    state = stateValue;
+    el('state-text').textContent = stateValue.configured ? '已配置' : '尚未配置';
+    el('state-dot').setAttribute('data-tone', stateValue.configured ? 'ok' : 'warn');
+    el('baseURL').value = stateValue.baseURL || '';
+    if (stateValue.port) el('port').value = String(stateValue.port);
+    if (stateValue.dns) el('dns').checked = stateValue.dns.enabled === true;
+    if (!keepKey) el('apiKey').value = '';
+    el('key-state').textContent = stateValue.apiKeySet
+      ? '已保存密钥。留空表示保持现有密钥；填写则替换。'
+      : '不会显示已保存的值；留空表示保持现有密钥。';
+    el('models').textContent = '';
+    var models = stateValue.models && stateValue.models.length ? stateValue.models
+      : [{ id: '', protocol: '', contextWindow: 131072, tools: true }];
+    models.forEach(function (model) { addModel(model); });
+  }
+
+  function facts(result) {
+    var rows = [
+      ['上游地址', result.baseURL],
+      ['网关端口', String(result.port)],
+      ['模型数量', String(result.models.length)],
+      ['网关 Token', result.tokenSet ? '已生成并保存到私有凭据文件' : '未生成'],
+      ['配置文件', result.configuration.file],
+      ['凭据文件', result.credentials.file]
+    ];
+    el('facts').innerHTML = rows.map(function (pair) {
+      return '<dt>' + esc(pair[0]) + '</dt><dd>' + esc(pair[1]) + '</dd>';
+    }).join('');
+  }
+
+  function serviceHint(service) {
+    if (!service) return '设置已保存，但未安装后台服务；关闭终端后网关会停止。';
+    if (service.state === 'installed') return '后台服务已安装并启动，登录后自动运行。';
+    if (service.state === 'unchanged') return '后台服务已在运行，配置未改变。';
+    if (service.state === 'started') return '后台服务已安全重启，新设置已生效。';
+    if (service.state === 'waiting') return '后台服务正在安全重启，新的控制面板即将就绪。';
+    if (service.state === 'unavailable') return '当前系统没有可用的后台服务机制，设置已保存；请用下面的命令手动启动。';
+    if (service.state === 'failed') return '设置已保存，但后台服务未能启动。可点「保存并继续」重试，或在终端执行 service status 查看原因。';
+    return '设置已保存，但未安装后台服务；关闭终端后网关会停止。';
+  }
+
+  // The control panel is the next real step, so it gets a direct link instead
+  // of an instruction to go back to a terminal. The link carries its own
+  // session key and is only ever shown on this page. A save that leaves the
+  // panel starting keeps polling this same authenticated endpoint, so a slow
+  // start or a safe restart never sends the user back to the terminal.
+  function applyPanel(panel, service, auto) {
+    var open = el('open-panel');
+    var waiting = el('panel-waiting');
+    var value = panel || {};
+    if (value.state === 'ready' && typeof value.entryURL === 'string' && value.entryURL) {
+      open.hidden = false;
+      open.setAttribute('href', value.entryURL);
+      open.textContent = '打开模型控制面板';
+      waiting.hidden = true;
+      if (auto && !autoOpened) {
+        autoOpened = true;
+        openPanel(value.entryURL);
+      }
+      return true;
+    }
+    open.hidden = true;
+    waiting.hidden = false;
+    if (value.state === 'waiting') {
+      waiting.textContent = '面板正在启动，页面会自动获取新链接，无需回到终端。'
+        + (pollAttempts > 0 ? '（已检查 ' + pollAttempts + ' 次）' : '');
+    } else if (service && service.state === 'failed') {
+      waiting.textContent = '后台服务未能启动，因此没有可用的面板链接。修改设置后点「保存并继续」即可重试。';
+    } else {
+      waiting.textContent = '面板尚未启动。保存时勾选「保存后安装为当前用户的后台服务」，或按下方命令手动启动。';
+    }
+    return false;
+  }
+
+  function stopPoll() {
+    if (pollTimer === null) return;
+    try { window.clearTimeout(pollTimer); } catch (error) {}
+    pollTimer = null;
+  }
+
+  // Timer access goes through the window object so a page test can supply its
+  // own clock; without one the page simply stops at the manual instruction
+  // instead of leaving a background timer behind.
+  function schedulePoll() {
+    if (pollTimer !== null || pollAttempts >= POLL_MAX) return;
+    if (!window || typeof window.setTimeout !== 'function') return;
+    pollTimer = window.setTimeout(function () { pollTimer = null; poll(); }, POLL_MS);
+  }
+
+  function poll() {
+    pollAttempts++;
+    api('/api/state').then(function (payload) {
+      var ready = applyPanel(payload.panel, payload.service, true);
+      var hint = el('done-hint');
+      if (payload.service && !el('done-card').hidden) hint.textContent = serviceHint(payload.service);
+      if (ready) { say('ok', '控制面板已就绪。'); return; }
+      if (payload.panel && payload.panel.state === 'waiting') { schedulePoll(); return; }
+      say('warn', '面板仍未就绪。可再次点「保存并继续」重新启动后台服务。');
+    }).catch(function (error) {
+      var code = error && (error.code || error.message);
+      if (code === 'unauthorized' || code === 'origin_refused' || code === 'too_many_attempts') {
+        say('bad', describe(error));
+        el('save').disabled = true;
+        return;
+      }
+      if (pollAttempts >= POLL_MAX) { say('warn', '面板仍未就绪。可再次点「保存并继续」重新启动后台服务。'); return; }
+      schedulePoll();
+    });
+  }
+
+  function showDone(result, service) {
+    el('done-card').hidden = false;
+    savedShown = true;
+    facts(result.state);
+    el('done-hint').textContent = serviceHint(service);
+    var installed = service && ['installed', 'unchanged', 'started', 'waiting'].indexOf(service.state) >= 0;
+    var panel = result.panel || {};
+    var ready = applyPanel(panel, service, true);
+    if (ready) stopPoll();
+    else if (panel.state === 'waiting') schedulePoll();
+    else stopPoll();
+    // A failed or missing service usually means the CLI can report why; the
+    // manual command is always offered so setup is never a dead end.
+    var steps = [
+      '打开并登录 Kimi Work。首次系统授权请在本机窗口完成；后台自动接入原生模型目录。',
+      '在控制面板查看「Kimi 接入」状态。目录就绪后，在 Work 原生模型菜单选择主模型，在面板设置子代理。',
+      '以后在面板增删模型即可自动同步；配置和凭据会保留，不需要重复复制 Token 或导入。'
+    ];
+    if (panel.state !== 'ready' && !installed) {
+      steps.push('可直接点「保存并继续」重试启动后台服务。选择手动模式时，运行：<code class="mono">kimi-work-gateway panel --config '
+        + esc(result.state.configuration.file) + ' --credentials ' + esc(result.state.credentials.file) + '</code>');
+    }
+    el('next-steps').innerHTML = steps.map(function (text) { return '<li>' + text + '</li>'; }).join('');
+    el('done-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function setSaving(value) {
+    saving = value;
+    el('save').disabled = value;
+    el('save').textContent = value ? '保存中…' : '保存并继续';
+  }
+
+  el('form').addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (saving) return;
+    clearMessage();
+    stopPoll();
+    pollAttempts = 0;
+    el('done-card').hidden = true;
+    var baseURL = el('baseURL').value.trim();
+    var apiKey = el('apiKey').value;
+    var port = Number(el('port').value);
+    var models;
+    try { models = readModels(); }
+    catch (error) { say('bad', MESSAGES.invalid_models); return; }
+    if (!baseURL) { say('bad', '请填写 Base URL。'); el('baseURL').focus(); return; }
+    if (!apiKey.trim() && !(state && state.apiKeySet)) {
+      say('bad', '请填写 API Key。'); el('apiKey').focus(); return;
+    }
+    for (var index = 0; index < models.length; index++) {
+      if (!models[index].id) { say('bad', '第 ' + (index + 1) + ' 个模型缺少 ID。'); return; }
+      if (!models[index].protocol) { say('bad', '第 ' + (index + 1) + ' 个模型未选择接口协议。'); return; }
+      if (!(models[index].contextWindow > 0)) { say('bad', '第 ' + (index + 1) + ' 个模型的上下文长度无效。'); return; }
+    }
+    var payload = { baseURL: baseURL, port: port, dns: el('dns').checked, models: models,
+      installService: el('installService').checked };
+    if (apiKey.trim()) payload.apiKey = apiKey.trim();
+    setSaving(true);
+    el('save-hint').textContent = payload.installService ? '正在写入配置并安装后台服务…' : '正在写入配置…';
+    api('/api/save', { method: 'POST', body: payload }).then(function (result) {
+      el('apiKey').value = '';
+      fill(result.state);
+      showDone(result, result.service);
+      say('ok', '设置已保存。');
+      el('save-hint').textContent = '';
+    }).catch(function (error) {
+      say('bad', describe(error));
+      el('save-hint').textContent = '';
+      if (error && (error.code === 'unauthorized' || error.code === 'origin_refused')) {
+        el('save').disabled = true;
+      }
+    }).then(function () { setSaving(false); });
+  });
+
+  el('add-model').addEventListener('click', function () {
+    if (el('models').children.length >= 32) { say('warn', '最多 32 个模型。'); return; }
+    addModel({ id: '', protocol: '', contextWindow: 131072, tools: true });
+  });
+
+  el('toggle-key').addEventListener('click', function () {
+    var input = el('apiKey');
+    var hidden = input.type === 'password';
+    input.type = hidden ? 'text' : 'password';
+    el('toggle-key').textContent = hidden ? '隐藏' : '显示';
+  });
+
+  el('reload').addEventListener('click', function () {
+    clearMessage();
+    // A reload is also how a user checks a panel that was still starting, so it
+    // refreshes the panel card too instead of only refilling the form.
+    load(true, true).then(function () { say('ok', '已重新读取磁盘上的设置。'); })
+      .catch(function (error) { say('bad', describe(error)); });
+  });
+
+  function load(keepKey, withPanel) {
+    return api('/api/state').then(function (payload) {
+      fill(payload.state, { keepKey: keepKey });
+      if (withPanel || savedShown) {
+        if (payload.panel || payload.service) {
+          if (withPanel) {
+            el('done-card').hidden = false;
+            savedShown = true;
+          }
+          el('done-hint').textContent = serviceHint(payload.service);
+          if (applyPanel(payload.panel, payload.service, true)) { stopPoll(); pollAttempts = 0; }
+          else if (payload.panel && payload.panel.state === 'waiting') schedulePoll();
+        }
+      }
+      return payload.state;
+    });
+  }
+
+  // The session key arrives in the fragment and is removed from the address
+  // bar immediately, so it never reaches history, logs or a referrer.
+  function adoptKey() {
+    var match = /(?:^|[#&])key=([a-zA-Z0-9]+)/.exec(location.hash || '');
+    if (match) {
+      key = match[1];
+      try { sessionStorage.setItem(KEY_STORE, key); } catch (error) {}
+      try { history.replaceState(null, '', location.pathname + location.search); } catch (error) { location.hash = ''; }
+      return true;
+    }
+    try { key = sessionStorage.getItem(KEY_STORE) || ''; } catch (error) { key = ''; }
+    return Boolean(key);
+  }
+
+  if (!adoptKey()) {
+    el('state-text').textContent = '缺少会话';
+    el('state-dot').setAttribute('data-tone', 'bad');
+    say('bad', '缺少设置页会话密钥，请从终端输出的完整链接重新打开。');
+    el('save').disabled = true;
+    return;
+  }
+  addModel({ id: '', protocol: '', contextWindow: 131072, tools: true });
+  load(false).catch(function (error) {
+    say('bad', describe(error));
+    el('state-dot').setAttribute('data-tone', 'bad');
+    el('state-text').textContent = '读取失败';
+  });
+})();
+</script>
+</body>
+</html>

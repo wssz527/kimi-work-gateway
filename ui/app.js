@@ -31,6 +31,7 @@ const ACTION_LABEL = {
   'prepare-runtime': '准备副本',
   'launch-kimi': '启动 Kimi',
   'prepare-native': '准备原生设置',
+  'connect-kimi': '重新接入 Kimi',
   'remove-dns': '撤销 DNS 映射',
   'copy-token': '复制 Token',
   'check-upstream': '上游检查',
@@ -47,6 +48,11 @@ const ACTION_STATE = {
   prepared: '已准备',
   starting: '启动请求已发出',
   'waiting-kimi-exit': '等待 Kimi 退出',
+  'waiting-idle': '等待 Kimi 空闲',
+  'waiting-quit': '等待 Kimi 正常退出',
+  active: '已连接',
+  inactive: '等待 Kimi 启动',
+  cancelled: '已取消',
   done: '已完成',
   copied: '已复制',
   passed: '通过',
@@ -391,6 +397,11 @@ const dom = {
   diagCompatDot: $('diag-compat-dot'),
   diagCompatState: $('diag-compat-state'),
   diagCompatMeta: $('diag-compat-meta'),
+
+  nativeRemote: $('native-remote'),
+  nativeRemoteDot: $('native-remote-dot'),
+  nativeRemoteWord: $('native-remote-word'),
+  nativeRemoteNote: $('native-remote-note'),
 
   updUnavailable: $('upd-unavailable'),
   updCurrent: $('upd-current'),
@@ -1232,7 +1243,49 @@ function renderShell(data) {
   setText(dom.navModelCount, fmtCount((data.models || []).length));
 }
 
+function desktopScopeInfo(data) {
+  const info = (data && data.integration) || {};
+  if (!info.desktop && info.imported !== true) return null;
+  return { tone: 'neutral', word: '仅桌面', note: '只接入本机官方 Kimi 桌面 Work，不同步模型或登录态到 Kimi 手机端。' };
+}
+
+function nativeConnectionText(data) {
+  const info = data.integration || {};
+  const preparation = info.preparation || {};
+  if (preparation.state === 'preparing') return '正在准备首次接入，请处理系统授权窗口。';
+  if (preparation.state === 'cancelled') return '上次系统授权已取消。点击“重新接入 Kimi”可继续。';
+  if (preparation.state === 'failed' || preparation.state === 'interrupted') return '接入准备未完成，请检查系统授权后重试。';
+  if (info.imported) return '模型目录已接入 Kimi 原生选择器；保存目录后自动同步。';
+  const reason = info.nativeImport?.reason || info.desktop?.reason || info.reason;
+  const reasons = {
+    native_bridge_unavailable: '正在等待 Kimi 接入通道，空闲后会自动恢复。',
+    native_bridge_waiting_settings: '正在等待 Kimi 设置页完成原生导入。',
+    native_bridge_waiting_launch: '等待 Kimi 启动并建立接入通道。',
+    native_import_waiting_login: '请先在 Kimi Work 登录，然后重试接入。',
+    native_import_disconnected: '检测到原生接入已断开。确认需要恢复后，点击“重新接入 Kimi”。',
+    native_scope_unverified: '当前自定义 Kimi 目录无法确认归属，自动接管已暂停。',
+    account_changed: '当前 Kimi 账户已变化，请核对账户后重试接入。',
+    native_import_account_changed: '当前 Kimi 账户已变化，请核对账户后重试接入。',
+    native_bridge_busy: 'Kimi 正在处理任务，空闲后会自动同步。',
+    native_import_retry_pending: '正在等待上一次接入完成。',
+  };
+  if (reasons[reason]) return reasons[reason];
+  if (info.state === 'pending') return '原生目录已接受，等待 Kimi 内核完成切换。';
+  if (info.state === 'conflict') return '接入配置存在冲突，已保留当前内容；请检查配置后重试。';
+  if (info.state === 'account-unverified') return '请登录 Kimi Work，等待确认当前账户。';
+  if (info.desktop?.state === 'waiting-idle' || info.desktop?.state === 'waiting-quit') return '等待 Kimi 空闲后恢复接入。';
+  return '正在检查模型接入；首次使用请先打开并登录 Kimi Work。';
+}
+
 function renderOverview(data) {
+  setText($('native-state'), nativeConnectionText(data));
+  const scope = desktopScopeInfo(data);
+  setHidden(dom.nativeRemote, !scope);
+  if (scope) {
+    setDot(dom.nativeRemoteDot, scope.tone);
+    setText(dom.nativeRemoteWord, scope.word);
+    setText(dom.nativeRemoteNote, scope.note);
+  }
   const gw = (data && data.gateway) || {};
   const running = gw.state === 'running';
   setDot(dom.factGatewayDot, running ? 'ok' : 'bad');
@@ -2492,7 +2545,7 @@ function evaluateTranslation(data, { dirty = false } = {}) {
   }
 
   if (runtime.state === 'disabled') {
-    return { tone: 'neutral', word: '待启动', note: '翻译已启用并保存；从网关启动 Kimi 后才会注入。' };
+    return { tone: 'neutral', word: '待连接', note: '翻译已启用，等待接入宿主连接；可点击“从网关启动 Kimi”重试。' };
   }
 
   return { tone: info.tone, word: info.word, note: reason || info.note };

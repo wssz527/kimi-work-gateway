@@ -14,7 +14,7 @@ import { TranslationRuntime } from './translation-runtime.mjs';
 import { GatewayUpdater, gatewayUpdateDirectory } from './update-manager.mjs';
 
 const ACTIONS = new Set(['prepare-runtime', 'launch-kimi', 'prepare-native', 'remove-dns', 'copy-token', 'check-upstream', 'check-compat',
-  'launch-translated-kimi', 'check-translation', 'check-update', 'install-update', 'rollback-update']);
+  'launch-translated-kimi', 'check-translation', 'check-update', 'install-update', 'rollback-update', 'connect-kimi']);
 const MODEL_FIELDS = new Set(['id', 'name', 'protocol', 'contextWindow', 'maxOutputTokens', 'tools', 'reasoning', 'inputModalities', 'reasoningEfforts', 'defaultEffort']);
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const base = config => ({ ...connectionFields(config), models: config.models, translation: normalizeTranslationConfig(config.translation) });
@@ -33,7 +33,7 @@ export class PanelError extends Error {
 export class PanelController {
   constructor({ configFile, config, gateway, backend, stateDir, kimiDir, policy,
     runtime, setup, probe, copyToken = copySetupToken, onPolicy, env = process.env,
-    inspectContract = inspectKimiContract, translationRuntime, updater } = {}) {
+    inspectContract = inspectKimiContract, translationRuntime, updater, nativeConnection } = {}) {
     this.configFile = path.resolve(configFile);
     this.config = config;
     this.baseHash = digest(base(config));
@@ -44,7 +44,9 @@ export class PanelController {
     this.runtime = runtime || new SubagentRuntime({ stateDir: path.resolve(stateDir) });
     this.setup = setup || new NativeSetup({ stateDir, flagFile: nativeFlagFile(kimiDir) });
     this.probe = probe || new NativeSetupProbe({ flagFile: nativeFlagFile(kimiDir) });
-    this.translation = translationRuntime || new TranslationRuntime({ stateDir, kimiDir, env });
+    this.nativeConnection = nativeConnection;
+    this.desktop = nativeConnection?.desktop;
+    this.translation = translationRuntime || this.desktop?.runtime || new TranslationRuntime({ stateDir, kimiDir, env });
     this.updater = updater || new GatewayUpdater({ updateDir: gatewayUpdateDirectory(env) });
     try { this.translation.configure(config.translation); }
     catch { this.translationError = 'translation_settings_conflict'; }
@@ -105,7 +107,7 @@ export class PanelController {
     let value;
     try {
       value = actual.mode === 'blocked' && /^[a-z][a-z0-9_-]{0,100}$/.test(actual.reason)
-        ? { mode: 'blocked', reason: actual.reason } : normalizeSubagentPolicy(actual, this.backend.models);
+        ? { mode: 'blocked', reason: actual.reason } : normalizeSubagentPolicy(actual, this.backend.models, this.policy.aliases);
       if (actual.schemaVersion !== 1 || !['inherit', 'force', 'pool', 'blocked'].includes(actual.mode)
         || ['force', 'pool'].includes(value.mode) && actual.modelAlias !== value.modelAlias
         || digest({ ...summarize(actual), homeDir: this.policy.homeDir }) !== actual.revision) throw Error();
@@ -154,10 +156,17 @@ export class PanelController {
     let updates;
     try { updates = this.updater.inspect(); }
     catch { updates = { currentVersion: 'unknown', state: 'failed', reason: 'update_state_invalid' }; }
+    let desktopInspect;
+    try { desktopInspect = this.desktop?.inspect(); } catch { desktopInspect = {}; }
     return { schemaVersion: 1, updates, revision: current?.revision ?? null,
       configuration: { state: current ? (current.compatible ? 'ready' : 'changed') : 'unavailable', file: path.basename(this.configFile) },
       gateway: { state: this.gateway.server ? 'running' : 'stopped', url: this.gateway.url,
         modelCount: this.backend.models.length, activeRequests: this.gateway.inflight.size },
+      integration: { ...(this.gateway.nativeIntegration?.status || { state: 'unchecked', imported: false }),
+        ...(this.nativeConnection ? { preparation: Object.fromEntries(Object.entries(this.nativeConnection.status || {})
+          .filter(([key]) => ['state', 'reason', 'stage'].includes(key))),
+          desktop: Object.fromEntries(Object.entries(desktopInspect || {})
+            .filter(([key]) => ['state', 'reason', 'version', 'enabled'].includes(key))) } : {}) },
       models: this.backend.models.map(model => ({ ...model })),
       subagents: { configured: summarize(configured), policy, runtime },
       translation: { configured: translationSettings, environment: { keySet: Boolean(this.env[translationSettings.apiKeyEnv]) }, runtime: translationRuntime },
@@ -171,11 +180,11 @@ export class PanelController {
     await this.serialize(async () => {
       if (!input || !['inherit', 'force', 'pool'].includes(input.mode)) throw new PanelError('invalid_subagent_policy');
       const current = this.currentConfiguration(input);
-      const desired = { mode: input.mode, ...(input.transport ? { transport: input.transport } : {}),
+      const desired = { mode: input.mode, transport: 'native-config',
         ...(['force', 'pool'].includes(input.mode) ? { model: input.model,
           ...(input.mode === 'pool' ? { models: input.models } : {}),
           ...(input.effort == null ? {} : { effort: input.effort }) } : {}) };
-      const normalized = normalizeSubagentPolicy(desired, this.backend.models);
+      const normalized = normalizeSubagentPolicy(desired, this.backend.models, this.policy.aliases);
       this.persist(current, { ...current.document, subagents: desired });
       this.config = { ...this.config, subagents: normalized };
       try { this.policy.configure(desired, this.backend.models); }
@@ -194,7 +203,7 @@ export class PanelController {
       const current = this.currentConfiguration(input);
       const models = validatePanelModels(input.models);
       let normalized;
-      try { normalized = normalizeSubagentPolicy(current.document.subagents, models); }
+      try { normalized = normalizeSubagentPolicy(current.config.subagents, models, this.policy.aliases); }
       catch { throw new PanelError('subagent_model_in_use', 409); }
       const previous = new Map(current.document.models.map(row => [row.id, row]));
       const stored = models.map(model => ({ ...Object.fromEntries(Object.entries(previous.get(model.id) || {})
@@ -255,11 +264,10 @@ export class PanelController {
     if (policy.mode === 'blocked') throw new PanelError('subagent_policy_unavailable', 409);
     this.translation.configure(current.config.translation);
     this.translationError = undefined;
-    const result = await this.translation.launch({ subagentRuntime: policy.transport === 'native-config' ? undefined : this.runtime,
+    const options = { subagentRuntime: policy.transport === 'native-config' ? undefined : this.runtime,
       force: policy.mode === 'force' && policy.transport !== 'native-config',
-      protectedEnvNames: this.protectedEnvNames });
-    // A non-force launch that could not adopt the prepared subagent bundle must
-    // be visible instead of silent: surface the runtime's own warning verbatim.
+      protectedEnvNames: this.protectedEnvNames };
+    const result = await (this.desktop ? this.desktop.start(options) : this.translation.launch(options));
     if (result?.warning) this.diagnostics.translationWarning = { at: Date.now(), reason: result.warning };
     else delete this.diagnostics.translationWarning;
     return result;
@@ -318,12 +326,16 @@ export class PanelController {
           else if (input.action === 'prepare-runtime') result = this.runtime.prepare();
           else if (input.action === 'launch-translated-kimi') result = await this.launchTranslation();
           else if (input.action === 'check-translation') result = this.translation.check();
+          else if (input.action === 'connect-kimi') {
+            if (!this.nativeConnection) throw new PanelError('native_connection_unavailable', 503);
+            result = await this.nativeConnection.retry();
+          }
           else if (input.action === 'launch-kimi') {
             if (normalizeTranslationConfig(this.config.translation).enabled) result = await this.launchTranslation();
             else {
               const policy = this.ownedPolicy();
               result = policy.mode === 'inherit' || policy.transport === 'native-config'
-                ? await this.runtime.launchOriginal({ protectedEnvNames: this.protectedEnvNames })
+                ? this.desktop ? await this.desktop.start() : await this.runtime.launchOriginal({ protectedEnvNames: this.protectedEnvNames })
                 : await this.runtime.launch({ protectedEnvNames: this.protectedEnvNames });
             }
           }
@@ -352,5 +364,6 @@ export class PanelController {
     this.closed = true;
     await this.tail;
     await this.operationTask;
+    this.nativeConnection?.close();
   }
 }

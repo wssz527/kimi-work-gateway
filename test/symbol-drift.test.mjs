@@ -34,13 +34,13 @@ function renameSymbols(text) {
 test.skipIf(!available)('the probe survives a full symbol rename of the installed bundle', () => {
   const original = readAsarEntry(archive);
   const catalog = nativeCatalog(probeModels());
+  const baseline = locateContract(original);
+  if (!baseline.ok) return;
   let rounds = 0;
 
   for (let round = 0; round < 3; round++) {
     const renamed = renameSymbols(original);
     // Nothing the probe previously knew by name may survive.
-    const baseline = locateContract(original);
-    if (!baseline.ok) return;
     expect(renamed.includes('function ' + baseline.table + '(')).toBe(false);
 
     const located = locateContract(renamed);

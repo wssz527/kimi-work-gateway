@@ -59,6 +59,49 @@ afterEach(async () => {
   }
 });
 
+test('legacy remote evidence is not published through the desktop integration state', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kwg-panel-remote-'));
+  const file = path.join(dir, 'config.json');
+  const document = { upstream: { baseURL: 'http://127.0.0.1:9/v1', apiKeyEnv: 'TEST_KEY' }, port: 0,
+    models: [{ id: 'group/test', protocol: 'responses', tools: true, contextWindow: 128000 }] };
+  writeSubagentJSON(file, document);
+  const config = readConfig(document);
+  const backend = new OpenAIBackend({ ...config.upstream, apiKey: 'test-key', models: config.models });
+  const gateway = new KimiWorkGateway({ backend });
+  await gateway.configure({ key: 'test-token', port: 0 });
+  const policy = new SubagentPolicy({ stateDir: dir, kimiDir: path.join(dir, 'kimi') });
+  policy.configure(config.subagents, backend.models);
+  const remoteInspect = { state: 'active', enabled: true, version: '3.2.21',
+    secret: 'synthetic-desktop-secret',
+    remote: { state: 'ready', catalog: 'catalog-extended', added: 7,
+      reason: 'remote_runtime_scope_unverified', apiKey: 'synthetic-remote-secret', extra: 'nope' } };
+  const controller = new PanelController({ configFile: file, config, gateway, backend, stateDir: dir,
+    kimiDir: path.join(dir, 'kimi'), policy,
+    runtime: { inspect: () => ({ state: 'not-prepared' }) },
+    translationRuntime: { configure() {}, inspect: () => ({ state: 'not-started' }), check: () => ({ state: 'not-started' }),
+      launch: async () => ({ state: 'starting' }) },
+    probe: { check: async () => ({ revealed: false }) },
+    nativeConnection: { status: { state: 'ready', stage: 'imported', hidden: 'synthetic-connection-secret' },
+      desktop: { inspect: () => remoteInspect },
+      retry: async () => ({ state: 'starting' }), close() {} } });
+  try {
+    const { integration } = await controller.state();
+    expect(integration.desktop).toEqual({ state: 'active', enabled: true, version: '3.2.21' });
+    const text = JSON.stringify(integration);
+    expect(text).not.toContain('synthetic-desktop-secret');
+    expect(text).not.toContain('synthetic-remote-secret');
+    expect(text).not.toContain('synthetic-connection-secret');
+    expect(text).not.toContain('catalog-extended');
+    expect(text).not.toContain('nope');
+    remoteInspect.remote = { state: 'ready', catalog: 'unheard-of', added: 999 };
+    const again = await controller.state();
+    expect(again.integration.desktop).toEqual({ state: 'active', enabled: true, version: '3.2.21' });
+  } finally {
+    await controller.close(); await gateway.stop(); policy.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('translation API preserves unrelated fields and returns only environment availability and actual runtime status', async () => {
   const f = await fixture();
   const response = await save(f, { provider: 'custom', customEndpoint: 'https://translation.example/v1/chat/completions', customModel: 'translator' });
@@ -107,7 +150,8 @@ test('both launch actions use the translation host and preserve the force policy
   }
   expect(f.calls).toHaveLength(2);
   for (const call of f.calls) {
-    expect(call).toMatchObject({ force: true, subagentRuntime: f.runtime });
+    expect(call).toMatchObject({ force: false, subagentRuntime: undefined });
+    expect(f.policy.value).toMatchObject({ mode: 'force', transport: 'native-config' });
     expect(call.protectedEnvNames).toEqual(['TEST_KEY', 'KIMI_WORK_GATEWAY_TOKEN']);
   }
   const response = await api(f, '/api/actions', intent('check-translation'));
@@ -127,8 +171,9 @@ test('plain launch starts original Kimi only in inherit mode and never drops a f
   const forced = await fixture({ force: true });
   await api(forced, '/api/actions', intent('launch-kimi'));
   await forced.controller.operationTask;
-  expect((await forced.controller.state()).operation.state).toBe('waiting-kimi-exit');
-  expect(forced.calls).toEqual(['adapted-launch']);
+  expect((await forced.controller.state()).operation.state).toBe('starting');
+  expect(forced.calls).toEqual(['original-launch']);
+  expect(forced.policy.value).toMatchObject({ mode: 'force', transport: 'native-config' });
 });
 
 test('saved-but-unapplied translation settings are visible and can be reapplied after a runtime write failure', async () => {
