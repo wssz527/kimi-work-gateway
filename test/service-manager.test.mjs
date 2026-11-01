@@ -8,6 +8,9 @@ import { GatewayService, SERVICE_LABEL, assertPersistableEnvironment, planServic
   renderLaunchAgent, scheduledTaskCommandLine, selectEnvironment, servicePaths, stableLauncherPath } from '../src/service-manager.mjs';
 
 const KEY = '{{SECRET_jpfbmwdv}}';
+// The uid that owns files this test creates. Tests that assert on file
+// ownership must use it instead of a literal that only holds on one machine.
+const CURRENT_UID = typeof process.getuid === 'function' ? process.getuid() : 0;
 const MODELS = [{ id: 'deepseek-v4-1-flash', protocol: 'responses', contextWindow: 131072, tools: true }];
 const cleanups = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()(); });
@@ -89,8 +92,10 @@ test('the macOS plan runs the stable launcher, not a release copy', () => {
   expect(plan.kind).toBe('launchd');
   expect(plan.target).toBe('gui/501/' + SERVICE_LABEL);
   // The service starts the stable launcher, which runs the runner; the runner
-  // then owns the panel. The panel key is never in argv.
-  expect(plan.argv).toEqual(['/opt/kimi-work-gateway/bin/kimi-work-gateway.mjs', 'service-run',
+  // then owns the panel. The panel key is never in argv. The fixture's launcher
+  // is resolved the way the service resolves it, so the expectation holds on a
+  // Windows drive-qualified path too.
+  expect(plan.argv).toEqual([path.resolve('/opt/kimi-work-gateway/bin/kimi-work-gateway.mjs'), 'service-run',
     '--state-dir', w.stateDir, '--log', path.join(w.stateDir, 'service.log'), '--',
     'panel', '--config', path.join(w.stateDir, 'gateway.json'), '--state-dir', w.stateDir,
     '--credentials', path.join(w.stateDir, 'credentials.json'),
@@ -119,7 +124,7 @@ test('the Windows plan registers a logon task for the current user without eleva
   expect(plan.supported).toBe(true);
   expect(plan.kind).toBe('scheduled-task');
   expect(plan.definition.path).toBeNull();
-  expect(plan.task.commandLine).toBe(scheduledTaskCommandLine('/usr/local/bin/node', plan.argv));
+  expect(plan.task.commandLine).toBe(scheduledTaskCommandLine(path.resolve('/usr/local/bin/node'), plan.argv));
   const create = plan.commands.load[0];
   expect(create.bin).toBe('schtasks');
   expect(create.args.slice(0, 7)).toEqual(['/Create', '/F', '/SC', 'ONLOGON', '/RL', 'LIMITED', '/TN']);
@@ -199,7 +204,9 @@ test('uninstall removes only its own files and keeps config, credentials and the
 }, 20000);
 
 test('status reports the panel link only from a private entry file', () => {
-  const w = workspace();
+  // The entry file belongs to whoever wrote it, so the service has to run as
+  // this process's own uid; a hard-coded 501 only ever holds on one machine.
+  const w = workspace({ uid: CURRENT_UID });
   w.service.install();
   const entryFile = w.service.entryFile;
   fs.writeFileSync(entryFile, JSON.stringify({ schemaVersion: 1, url: 'http://127.0.0.1:3427',
@@ -215,6 +222,10 @@ test('status reports the panel link only from a private entry file', () => {
     expect(w.service.status().panel).toBeUndefined();
     fs.chmodSync(entryFile, 0o600);
     expect(readPanelEntry(entryFile)).toBeTruthy();
+    // Private is not enough by itself: an entry owned by another user is
+    // refused, and that owner check stays in place.
+    expect(readPanelEntry(entryFile, { uid: CURRENT_UID + 1 })).toBeNull();
+    expect(readPanelEntry(entryFile, { uid: CURRENT_UID })).toBeTruthy();
   }
   fs.rmSync(entryFile);
   expect(w.service.status().panel).toBeUndefined();
@@ -356,7 +367,9 @@ test('service install never writes a secret into the definition or the record', 
   }
   const record = JSON.parse(fs.readFileSync(files[1], 'utf8'));
   expect(record.environment).toEqual(['HTTPS_PROXY']);
-  expect(record.launcher).toBe('/opt/kimi-work-gateway/bin/kimi-work-gateway.mjs');
+  // The record stores the launcher the service actually resolved; a POSIX
+  // literal would only hold on a machine that resolves paths that way.
+  expect(record.launcher).toBe(w.service.launcherPath);
   // The only 64-hex value in the record is the definition digest.
   expect(record.definitionDigest).toMatch(/^[a-f0-9]{64}$/);
   const hexes = (fs.readFileSync(files[1], 'utf8').match(/[a-f0-9]{64}/g) || []);

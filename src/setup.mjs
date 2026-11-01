@@ -68,7 +68,11 @@ export function inspectOwnedFile(file, { platform = process.platform, uid = curr
 function readJson(file, options) {
   const inspected = inspectOwnedFile(file, options);
   if (inspected.state === 'absent') return null;
-  if (options?.requirePrivate && options.platform !== 'win32' && (inspected.stat.mode & 0o077) !== 0) {
+  // Windows reports a mode of its own making (0666 for a file only the owner's
+  // ACL protects), so the POSIX privacy check applies to the host platform
+  // unless the caller named one explicitly.
+  const platform = options?.platform ?? process.platform;
+  if (options?.requirePrivate && platform !== 'win32' && (inspected.stat.mode & 0o077) !== 0) {
     throw new SetupError('setup_credentials_permissions', 409);
   }
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }

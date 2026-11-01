@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { OfficialUpdateClient } from '../src/remote-update-client.mjs';
 
@@ -40,7 +41,9 @@ describe('official updater private transport', () => {
     expect(fixture.frames[1].value).toEqual(feed);
     expect(fixture.launches).toHaveLength(1);
     expect(fixture.launches[0][0]).toBe(fixture.application);
-    expect(fixture.launches[0][2].env).toEqual({ HOME: '/own/update-home', TMPDIR: '/own/update-home/tmp', PATH: '/usr/bin', ELECTRON_RUN_AS_NODE: '1' });
+    // TMPDIR is derived with path.join like the client does, so the expectation
+    // holds on every platform instead of assuming POSIX separators.
+    expect(fixture.launches[0][2].env).toEqual({ HOME: '/own/update-home', TMPDIR: path.join('/own/update-home', 'tmp'), PATH: '/usr/bin', ELECTRON_RUN_AS_NODE: '1' });
     expect(JSON.stringify(fixture.events)).not.toContain('private-feed');
   });
 

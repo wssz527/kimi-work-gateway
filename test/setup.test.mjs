@@ -4,7 +4,10 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { run } from '../cli.mjs';
+import { run as runCommand } from '../cli.mjs';
+// Nothing in this file exercises real native onboarding: an isolated run would
+// otherwise reach the macOS administrator prompt while only serving a panel.
+const run = (argv, env, io, overrides = {}) => runCommand(argv, env, io, { nativeConnection: false, ...overrides });
 import { SetupServer, saveSetup, setupPaths, setupState, inspectOwnedFile, normalizeSetupInput,
   normalizeSetupModels, readCredentials, writePanelEntry } from '../src/setup.mjs';
 
@@ -334,7 +337,8 @@ test('a saved setup hands the authenticated page its real control panel link', a
   expect(body.panel.entryURL).toBe('http://127.0.0.1:3427/#key=' + 'e'.repeat(64));
   // The page never sees the upstream key, and the entry file itself stays private.
   expect(saved.text).not.toContain(KEY);
-  expect(fs.statSync(f.paths.entry).mode & 0o777).toBe(0o600);
+  // Windows has no POSIX mode to assert; the owner ACL is the privacy boundary.
+  if (process.platform !== 'win32') expect(fs.statSync(f.paths.entry).mode & 0o777).toBe(0o600);
 }, 30000);
 
 test('a setup save reports a waiting panel instead of failing when nothing publishes a link', async () => {
@@ -560,22 +564,39 @@ test('a failed service keeps the setup server alive until the page retries and t
   expect(io.lines.out.join('\n')).not.toContain(KEY);
 }, 30000);
 
-test('panel --credentials reads the two named values and refuses a public file', async () => {
+test('panel --credentials starts from the two named values with no shell environment', async () => {
   const { directory, stateDir } = workspace();
   const paths = setupPaths({ stateDir });
   const { config } = normalizeSetupInput({ baseURL: 'https://api.example.com/v1', apiKey: KEY, models: MODELS,
     port: await freePort(), dns: false });
   saveSetup({ paths, config, apiKey: KEY });
 
-  // A background start has no shell environment.
+  // A background start has no shell environment. The Kimi home is a temporary
+  // one: this test must never read or write the user's real data directory.
+  const io = capture();
+  const kimiDir = path.join(directory, 'kimi');
   const runner = { code: await run(['panel', '--config', paths.config, '--state-dir', stateDir,
-    '--credentials', paths.credentials, '--ui-port', '0'], {}, capture(), { waitForShutdown: async () => {} }) };
+    '--kimi-dir', kimiDir, '--credentials', paths.credentials, '--ui-port', '0'], {}, io, { waitForShutdown: async () => {} }) };
   expect(runner.code).toBe(0);
+  expect(io.lines.out.join('\n')).not.toContain(KEY);
+  fs.rmSync(directory, { recursive: true, force: true });
+}, 30000);
+
+// Public readability is a POSIX mode; Windows keeps the file private through
+// the owner ACL, where 0644 is not expressible and chmod is not a permission
+// boundary. Only the POSIX refusal is asserted here.
+test.skipIf(process.platform === 'win32')('panel --credentials refuses a publicly readable file on POSIX', async () => {
+  const { directory, stateDir } = workspace();
+  const paths = setupPaths({ stateDir });
+  const { config } = normalizeSetupInput({ baseURL: 'https://api.example.com/v1', apiKey: KEY, models: MODELS,
+    port: await freePort(), dns: false });
+  saveSetup({ paths, config, apiKey: KEY });
 
   const io = capture();
   fs.chmodSync(paths.credentials, 0o644);
   const code = await run(['panel', '--config', paths.config, '--state-dir', stateDir,
-    '--credentials', paths.credentials, '--ui-port', '0'], {}, io, { waitForShutdown: async () => {} });
+    '--kimi-dir', path.join(directory, 'kimi'), '--credentials', paths.credentials, '--ui-port', '0'], {}, io,
+  { waitForShutdown: async () => {} });
   expect(code).toBe(2);
   expect(io.lines.err.join('\n')).toContain('cannot read credentials file');
   expect(io.lines.out.join('\n')).not.toContain(KEY);
@@ -591,6 +612,7 @@ test('panel writes a private entry file for the background status link and remov
   const entryFile = path.join(directory, 'run', 'panel-entry.json');
   const io = capture();
   const code = await run(['panel', '--config', paths.config, '--state-dir', stateDir,
+    '--kimi-dir', path.join(directory, 'kimi'),
     '--credentials', paths.credentials, '--entry-file', entryFile, '--ui-port', '0'], {}, io, {
     waitForShutdown: async () => {
       const entry = JSON.parse(fs.readFileSync(entryFile, 'utf8'));
@@ -617,6 +639,33 @@ test('credentials read back only from a regular private file', async () => {
   // A gateway token that is not 32 random bytes is not accepted.
   fs.writeFileSync(paths.credentials, JSON.stringify({ schemaVersion: 1, upstreamApiKey: KEY, gatewayToken: 'short' }), { mode: 0o600 });
   expect(() => readCredentials(paths.credentials)).toThrow('setup_credentials_conflict');
+});
+
+// Windows privacy is the owner ACL, not a POSIX mode: the mode Windows reports
+// for a file this tool wrote is 0666 and cannot be narrowed, so applying the
+// POSIX rule there refused every legitimate `requirePrivate` read.
+test('a requirePrivate read applies the POSIX rule only outside Windows', () => {
+  const { stateDir } = workspace();
+  const paths = setupPaths({ stateDir });
+  const { config } = normalizeSetupInput({ baseURL: 'https://api.example.com/v1', apiKey: KEY, models: MODELS });
+  const written = saveSetup({ paths, config, apiKey: KEY });
+  if (process.platform !== 'win32') fs.chmodSync(paths.credentials, 0o644);
+
+  expect(readCredentials(paths.credentials, { platform: 'win32', requirePrivate: true }).gatewayToken)
+    .toBe(written.credentials.gatewayToken);
+  for (const platform of ['darwin', 'linux']) {
+    // uid is pinned so this isolates the POSIX mode rule; ownership on a
+    // Windows host is a separate check with its own coverage.
+    expect(() => readCredentials(paths.credentials, { platform, uid: null, requirePrivate: true }))
+      .toThrow('setup_credentials_permissions');
+  }
+  // A caller that names no platform is judged by the platform it runs on; this
+  // is the shape the background service and the CLI already use.
+  if (process.platform === 'win32') {
+    expect(readCredentials(paths.credentials, { requirePrivate: true }).gatewayToken).toBe(written.credentials.gatewayToken);
+  } else {
+    expect(() => readCredentials(paths.credentials, { requirePrivate: true })).toThrow('setup_credentials_permissions');
+  }
 });
 
 test('a panel edit of models does not expire the setup ownership', () => {

@@ -603,12 +603,27 @@ test('a session whose pipe closed is recoverable once the idle evidence allows i
 
 test('process discovery compares executable paths, not just names', () => {
   const name = process.platform === 'darwin' ? 'Kimi' : 'Kimi.exe';
-  const located = inspectApplicationProcesses('/definitely/not/running/' + name);
-  // A same-named binary elsewhere must never be reported as this installation,
-  // whether or not such a process happens to be running on this machine.
+  const application = '/definitely/not/running/' + name;
+  const elsewhere = process.platform === 'win32' ? 'C:\\Somewhere\\Else\\' + name : '/somewhere/else/' + name;
+  const pid = 4321;
+  // The process table is injected, so the result never depends on what this
+  // machine happens to be running: a same-named binary really is present, at a
+  // path that is not this installation.
+  const located = inspectApplicationProcesses(application, process.platform, { run: (file, args) => {
+    if (process.platform === 'win32') {
+      expect(file).toBe('powershell.exe');
+      expect(args.join(' ')).toContain(name.replace(/\.exe$/i, ''));
+      return { status: 0, stdout: pid + ' ' + elsewhere + '\r\n' };
+    }
+    expect(file).toBe('ps');
+    return { status: 0, stdout: pid + ' ' + elsewhere + '\n' };
+  } });
+  // A same-named binary elsewhere must never be reported as this installation.
   expect(located.pids).toEqual([]);
-  expect(located.nameMatches).toBeGreaterThanOrEqual(located.pids.length);
-  expect(located.total).toBeGreaterThan(0);
+  // It was seen and counted by name, which is exactly why the path comparison
+  // matters: an empty pids array here is a decision, not an empty process table.
+  expect(located.nameMatches).toBe(1);
+  expect(located.total).toBe(1);
 });
 
 test('a launch failure is reported as failed and leaves supervision enabled for the next tick', async () => {

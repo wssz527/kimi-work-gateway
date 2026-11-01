@@ -173,16 +173,24 @@ test('windows identity is unknown unless the pid, output and exit code all check
   expect(at({ status: 0, stdout: '134379595770000000' }, 0)).toEqual({ kind: 'unknown' });
 });
 
-// The identity helper only claims a real binding where it can actually obtain
-// one. Elsewhere the answer has to be "unknown" so the caller keeps waiting.
-test('process start identity is a real darwin binding and explicitly unknown elsewhere', () => {
+// The identity helper claims a real binding where it can actually obtain one:
+// a `ps` start time on macOS and a creation FILETIME on Windows. Linux has
+// neither, so there the answer is "unknown" and the caller keeps waiting.
+test('process start identity is real on macOS and Windows and unknown on Linux', () => {
   expect(processStartIdentity(0)).toEqual({ kind: 'unknown' });
+  // A non-positive pid is refused before any platform query runs.
+  expect(processStartIdentity(0, { platform: 'win32' })).toEqual({ kind: 'unknown' });
+  expect(processStartIdentity(0, { platform: 'darwin' })).toEqual({ kind: 'unknown' });
   if (process.platform === 'darwin') {
     const own = processStartIdentity(process.pid);
     expect(own.kind).toBe('darwin_ps_lstart');
     expect(typeof own.value).toBe('string');
     expect(own.value.length).toBeGreaterThan(4);
   }
-  expect(processStartIdentity(process.pid, { platform: 'win32' })).toEqual({ kind: 'unknown' });
+  if (process.platform === 'win32') {
+    const own = processStartIdentity(process.pid);
+    expect(own.kind).toBe('windows_process_creation_filetime');
+    expect(windowsFiletimeToUnixMilliseconds(own.value)).toBeNumber();
+  }
   expect(processStartIdentity(process.pid, { platform: 'linux' })).toEqual({ kind: 'unknown' });
 });

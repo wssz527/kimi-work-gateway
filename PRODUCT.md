@@ -38,7 +38,7 @@ web
 
 ## Evidence on Hand
 
-0.8.0 核心及其真实分发包在 Bun 1.4.4 中均为 749 项通过、2 项环境跳过、0 失败，58 个文件语法检查通过；插件 0.7.0 候选分发包为 97 项通过、0 失败，74 个文件语法检查及 vendor 校验通过，最终发布包仍需在固定核心提交后重验。macOS 官方 Kimi 3.2.23 经 Magpie 真实 Agents 开关接入后，宿主与 Kimi 的同一 PID 已连续运行超过 10 分钟，无 companion、凭据 helper 或额外 Kimi 应用启动；`controlOnly:true`、`remoteModels:false`，原 Savitr 账号与历史任务保留。6 个模型进入原生菜单，滚动显示完整条目后已实际选中 GLM-5.3 Flash，未发送任务或调用付费上游。默认路径不再复制登录环境或接管 `safeStorage`；旧远程实验中账号退出、配置重建失败和手机端方案均不作为本版能力。第三方桌面模型与登录态不同步到手机端；真实上游推理、续聊和本地 Windows 新增真机验收仍未执行，不能用目录和选模结果替代。
+0.8.0 最终分发包 `kimi-work-gateway-0.8.0.tgz` 经 `scripts/verify-package.mjs` 在 Bun 1.4.4 中解包验收为 751 项通过、2 项环境跳过、0 失败，58 个文件语法检查通过；包内 132 个文件与核心源码逐字节一致，源码树未再单独重跑同一套测试。插件 0.7.0 候选分发包为 97 项通过、0 失败，74 个文件语法检查及 vendor 校验通过；该结果早于固定最终公共核心提交，插件仍须在该提交上重验，对应 CI 与 Release 尚未完成。macOS 官方 Kimi 3.2.23 经 Magpie 真实 Agents 开关接入后，宿主与 Kimi 的同一 PID 已连续运行超过 10 分钟，无 companion、凭据 helper 或额外 Kimi 应用启动；`controlOnly:true`、`remoteModels:false`，原 Savitr 账号与历史任务保留。6 个模型进入原生菜单，滚动显示完整条目后已实际选中 GLM-5.3 Flash，未发送任务或调用付费上游。默认路径不再复制登录环境或接管 `safeStorage`；旧远程实验中账号退出、配置重建失败和手机端方案均不作为本版能力。第三方桌面模型与登录态不同步到手机端；真实上游推理、续聊和本地 Windows 新增真机验收仍未执行，不能用目录和选模结果替代。
 
 ## Product Principles
 

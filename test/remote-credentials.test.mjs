@@ -8,15 +8,20 @@ import { installRemoteCredentials, MAX_PLAINTEXT, credentialApplication,
   remoteCredentialsPaths, rotateRemoteCredentialsLog } from '../src/remote-credentials.mjs';
 import { readCredentialServiceConfig, startRemoteCredentialsService } from '../src/remote-credentials-service.mjs';
 
+// This module is macOS-only: its helper identity is a Keychain ACL and its
+// private channel is a Unix socket owned by the current uid, so the suites below
+// are skipped elsewhere instead of asserting support that does not exist.
 // One fixture tree for the whole file, outside TMPDIR so a service that repoints
-// temp cannot relocate it, and removed once in afterAll so no case directory can
-// survive into another suite.
-const BASE = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), '.kwg-credentials-test-')));
-afterAll(() => fs.rmSync(BASE, { recursive: true, force: true }));
+// temp cannot relocate it, is created on first use and removed once in afterAll:
+// no case directory survives into another suite, and a skipped run leaves
+// nothing behind.
+let BASE;
+const fixtureTree = () => (BASE ??= fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), '.kwg-credentials-test-'))));
+afterAll(() => { if (BASE) fs.rmSync(BASE, { recursive: true, force: true }); });
 let counter = 0;
 
 function stateRoot() {
-  const root = path.join(BASE, 'case-' + (++counter));
+  const root = path.join(fixtureTree(), 'case-' + (++counter));
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   return fs.realpathSync(root);
 }
@@ -75,7 +80,11 @@ function invoker(responses) {
 
 const surface = value => Object.keys(value).sort();
 
-describe('installRemoteCredentials replaces the live safeStorage methods', () => {
+// src/remote-credentials.mjs refuses every non-darwin state directory, so the
+// whole file runs only where the helper actually exists.
+const macos = process.platform === 'darwin';
+
+describe.skipIf(!macos)('installRemoteCredentials replaces the live safeStorage methods', () => {
   test('returns exactly the three synchronised methods plus uninstall', () => {
     const { config } = configFixture();
     const delegated = installRemoteCredentials(mockSafeStorage(), config,
@@ -293,7 +302,7 @@ describe('installRemoteCredentials replaces the live safeStorage methods', () =>
   });
 });
 
-describe('resident helper private channel', () => {
+describe.skipIf(!macos)('resident helper private channel', () => {
   // The fake covers only what the service calls; whenReady is deliberately
   // absent so the documented on('ready') fallback is exercised.
   function fakeElectron(overrides = {}) {
@@ -462,7 +471,7 @@ describe('resident helper private channel', () => {
   });
 });
 
-describe('credential service configuration', () => {
+describe.skipIf(!macos)('credential service configuration', () => {
   test('accepts the private layout and rejects anything that escapes it', () => {
     const { root } = configFixture();
     const file = path.join(root, 'service.json');
@@ -487,7 +496,7 @@ describe('credential service configuration', () => {
   });
 });
 
-describe('credential service diagnostics', () => {
+describe.skipIf(!macos)('credential service diagnostics', () => {
   test('log rotation keeps one bounded backup', () => {
     const root = stateRoot(), file = path.join(root, 'service.log');
     fs.writeFileSync(file, Buffer.alloc(1024 * 1024 + 1, 120), { mode: 0o600 });

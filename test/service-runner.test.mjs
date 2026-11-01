@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ServiceRunner, inspectRunner, probePanelActivity, requestRunner, probeNativeActivity, argumentValue } from '../src/service-runner.mjs';
+import { defaultKimiDirectory } from '../src/paths.mjs';
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
@@ -359,7 +360,7 @@ describe('native activity', () => {
     const service = runner({ space, workProbe: options => { seen.push(options); return idleProbe(); } });
     service.spawnChild();
     await service.restartChild();
-    expect(seen).toEqual([{ kimiDir: '/kimi', platform: process.platform, env: {} }]);
+    expect(seen).toEqual([{ kimiDir: path.resolve('/kimi'), platform: process.platform, env: {} }]);
   }, 20000);
 
   test('--no-native skips the Work probe and also disables native integration in the child', async () => {
@@ -377,7 +378,10 @@ describe('native activity', () => {
     expect(await service.restartChild()).toMatchObject({ state: 'restarted' });
     expect(probes).toBe(0);
     expect(service.nativeEnabled).toBe(false);
-    expect(childArgv[0]).toEqual(['/opt/kimi-work-gateway/bin/kimi-work-gateway.mjs', 'panel', '--config', '/x/gateway.json', '--no-native']);
+    // The child is spawned with the runner's own resolved launcher path, so the
+    // expectation is the resolved form rather than a bare POSIX literal.
+    expect(childArgv[0]).toEqual([path.resolve('/opt/kimi-work-gateway/bin/kimi-work-gateway.mjs'),
+      'panel', '--config', '/x/gateway.json', '--no-native']);
   }, 20000);
 
   test('the kimi directory comes from --kimi-dir, then from the platform default', () => {
@@ -392,8 +396,10 @@ describe('native activity', () => {
       argv: ['panel', '--kimi-dir', '/k/one'] });
     expect(fromArgv.kimiDir).toBe(path.resolve('/k/one'));
     const fallback = new ServiceRunner({ stateDir: space.stateDir, launcherPath: '/x/y.mjs', argv: ['panel'], platform: 'linux' });
-    expect(fallback.kimiDir).toBe(path.resolve(path.join(path.join(process.env.HOME || tmpdir(), '.config'),
-      'kimi-desktop', 'daimon-share', 'daimon')));
+    // The expected default is built by the same helper the production code
+    // uses: mixing os.homedir() with an environment variable is what differed
+    // between a CI account and its short-name temp directory.
+    expect(fallback.kimiDir).toBe(path.resolve(defaultKimiDirectory(undefined, 'linux')));
   }, 20000);
 
   test('the native probe needs two agreeing idle readings', async () => {
@@ -437,17 +443,25 @@ describe('native activity', () => {
       inspect: () => ({ pids: [123], nameMatches: 1, total: 400 }) });
     expect(running).toEqual({ state: 'unknown', reason: 'native_activity_unknown', detail: 'native_idle_control_failed' });
 
+    // An installation that exists but cannot be matched to its executable is a
+    // corrupt or unknown build: the archive is a real file, so "not installed"
+    // is not an acceptable answer. The workspace owns the placeholder, so the
+    // fixture does not depend on the host having Kimi in /Applications.
+    const space = workspace();
+    const archive = path.join(space.root, 'Kimi.app', 'Contents', 'Resources', 'app.asar');
+    fs.mkdirSync(path.dirname(archive), { recursive: true });
+    fs.writeFileSync(archive, 'placeholder');
     const unlocatable = await probeNativeActivity({ kimiDir: '/kimi',
       confirm: async () => ({ state: 'unknown', reason: 'native_idle_runner_absent' }),
       locate: () => { throw Error('translation_kimi_unavailable'); },
-      archives: () => ['/Applications/Kimi.app/Contents/Resources/app.asar'] });
+      archives: () => [archive] });
     expect(unlocatable).toEqual({ state: 'unknown', reason: 'native_activity_unknown', detail: 'native_idle_runner_absent' });
 
     // No Kimi installed at all: nothing can be in flight, so a restart is safe.
     const absent = await probeNativeActivity({ kimiDir: '/kimi',
       confirm: async () => ({ state: 'unknown', reason: 'native_idle_runner_absent' }),
       locate: () => { throw Error('translation_kimi_unavailable'); },
-      archives: () => [path.join(tmpdir(), 'kwg-not-installed', 'app.asar')] });
+      archives: () => [path.join(space.root, 'not-installed', 'Resources', 'app.asar')] });
     expect(absent).toEqual({ state: 'not_running', reason: 'native_kimi_not_installed', detail: 'native_idle_runner_absent' });
   }, 20000);
 });

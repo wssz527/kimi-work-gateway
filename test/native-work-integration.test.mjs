@@ -569,7 +569,8 @@ describe('secrets', () => {
     expect((await next.reconcile(options)).nativeImport).toBeUndefined();
     expect(imports).toBe(1);
     const receiptPath = path.join(context.stateDir, 'native-work-catalog.json');
-    expect(fs.statSync(receiptPath).mode & 0o777).toBe(0o600);
+    // Windows reports its own mode; the private-file rule there is the owner ACL.
+    if (process.platform !== 'win32') expect(fs.statSync(receiptPath).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(receiptPath, 'utf8')).not.toContain(TOKEN);
   });
 
