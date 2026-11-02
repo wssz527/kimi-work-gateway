@@ -2477,6 +2477,9 @@ const TRANSLATION_REASON = {
   'launch-failed': '带翻译的 Kimi 启动失败。',
   'translation_legacy_running': '检测到任务 3 的旧注入仍在运行，网关未重复挂载。',
   'translation_waiting_work_view': '已连接 Kimi，正在等待打开 Work 思考页面。',
+  'translation_waiting_chat_view': '已连接 Kimi，正在等待打开 Chat 会话中的思考内容。',
+  'translation_not_target': '当前页面不是受支持的思考页面，已拒绝翻译。',
+  'translation_stale_generation': '页面已切换，旧页面的翻译请求已被丢弃。',
   'translation_renderer_unconfirmed': 'Kimi 渲染页面未确认翻译引擎，可能是不兼容的界面版本。',
   'translation_session_conflict': '翻译会话记录冲突，请检查状态目录或重启面板。',
   'translation_host_stale': '上一次翻译会话状态已过期，请重新启动。',
@@ -2541,7 +2544,7 @@ function evaluateTranslation(data, { dirty = false } = {}) {
   }
 
   if (runtime.state === 'active') {
-    return { tone: 'ok', word: '已注入', note: 'Kimi 已确认翻译引擎在运行。' };
+    return { tone: 'ok', word: '已注入', note: translationSurfaceNote(runtime) };
   }
 
   if (runtime.state === 'disabled') {
@@ -2549,6 +2552,28 @@ function evaluateTranslation(data, { dirty = false } = {}) {
   }
 
   return { tone: info.tone, word: info.word, note: reason || info.note };
+}
+
+/* 每个面单独回报结构：空会话与选择器漂移以前都会显示成“已注入”，用户无法分辨
+   是页面还没有思考内容，还是这一版界面已经换了结构。 */
+const TRANSLATION_SURFACE_LABEL = { work: 'Work', chat: 'Chat' };
+const TRANSLATION_STRUCTURE_NOTE = {
+  none: '页面上还没有可以翻译的思考内容。',
+  partial: '检测到思考块但结构与翻译引擎不匹配，可能是不兼容的界面版本。',
+};
+
+function translationSurfaceNote(runtime) {
+  const surfaces = runtime && runtime.surfaces;
+  if (!surfaces || typeof surfaces !== 'object') return 'Kimi 已确认翻译引擎在运行。';
+  const notes = [];
+  for (const name of ['work', 'chat']) {
+    const entry = surfaces[name];
+    if (!entry || entry.state !== 'active') continue;
+    const label = TRANSLATION_SURFACE_LABEL[name] || name;
+    const structure = TRANSLATION_STRUCTURE_NOTE[entry.structure];
+    notes.push(structure ? `${label}：${structure}` : `${label}：翻译已就绪。`);
+  }
+  return notes.length ? notes.join(' ') : 'Kimi 已确认翻译引擎在运行。';
 }
 
 function setTranslationControlsDisabled(disabled) {

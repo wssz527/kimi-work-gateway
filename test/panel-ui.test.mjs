@@ -669,7 +669,6 @@ test('only a runtime-confirmed active state counts as injected translation', () 
     runtime: { state: 'inactive' },
   }) });
   expect(panel.evaluateTranslation(enabledNotInjected).word).toBe('未生效');
-
   const pending = baseState({ translation: translationState({
     configured: { ...translationState().configured, enabled: true },
     runtime: { state: 'pending-settings' },
@@ -700,6 +699,43 @@ test('only a runtime-confirmed active state counts as injected translation', () 
 
   expect(panel.evaluateTranslation(active, { dirty: true }).word).toBe('有未保存修改');
   expect(panel.evaluateTranslation(active, { dirty: true }).note).toContain('当前运行状态未改变');
+});
+
+// A Chat page is a different surface from Work, and an empty conversation is a
+// different fact from drifted selectors. Both used to read as "injected".
+test('the panel names the Chat surface and distinguishes empty from drifted structure', () => {
+  const panel = ui();
+  const withSurfaces = surfaces => baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'active', surfaces },
+  }) });
+
+  expect(panel.evaluateTranslation(withSurfaces({
+    chat: { state: 'active', structure: 'none', blocks: 0, seenBlocks: 0 },
+  }))).toEqual({ tone: 'ok', word: '已注入', note: 'Chat：页面上还没有可以翻译的思考内容。' });
+
+  expect(panel.evaluateTranslation(withSurfaces({
+    chat: { state: 'active', structure: 'partial', blocks: 1, seenBlocks: 3 },
+  })).note).toBe('Chat：检测到思考块但结构与翻译引擎不匹配，可能是不兼容的界面版本。');
+
+  expect(panel.evaluateTranslation(withSurfaces({
+    work: { state: 'active', structure: 'matched', blocks: 2, seenBlocks: 2 },
+  }))).toEqual({ tone: 'ok', word: '已注入', note: 'Work：翻译已就绪。' });
+
+  // Both surfaces at once are reported together, Work first.
+  expect(panel.evaluateTranslation(withSurfaces({
+    chat: { state: 'active', structure: 'none' },
+    work: { state: 'active', structure: 'matched' },
+  })).note).toBe('Work：翻译已就绪。 Chat：页面上还没有可以翻译的思考内容。');
+
+  // The new waiting reason has real copy instead of the raw machine code.
+  const waitingChat = baseState({ translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    runtime: { state: 'attaching', reason: 'translation_waiting_chat_view' },
+  }) });
+  const note = panel.evaluateTranslation(waitingChat).note;
+  expect(note).toBe('已连接 Kimi，正在等待打开 Chat 会话中的思考内容。');
+  expect(note).not.toContain('translation_');
 });
 
 test('launching translated Kimi needs a saved enabled configuration and no unsaved draft', () => {

@@ -149,6 +149,11 @@ export class PanelController {
     const translationRuntime = Object.fromEntries(['state', 'version', 'reason', 'warning', 'verification']
       .filter(field => typeof translationStatus?.[field] === 'string').map(field => [field, translationStatus[field]]));
     if (Number.isInteger(translationStatus?.pid)) translationRuntime.pid = translationStatus.pid;
+    // Per-surface state travels beside the aggregate state: it is what tells
+    // "Chat is attached but shows no reasoning yet" apart from "the page is
+    // translating" and from "the selectors drifted". `TranslationRuntime`
+    // already reduced it to an allowlisted shape.
+    if (translationStatus?.surfaces) translationRuntime.surfaces = translationStatus.surfaces;
     if (this.diagnostics.translationWarning?.reason) translationRuntime.warning = this.diagnostics.translationWarning.reason;
     const compatibility = this.runtimeStatus?.compatibility;
     if (compatibility && ['structural', 'existing'].includes(compatibility.strategy)

@@ -18,22 +18,22 @@ Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次
 
 ## 安装与首次使用
 
-需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。兼容检查依据解析器、原生配置与运行时结构，不以版本号白名单决定。新的原生子代理池需显式启用配置同步；旧副本路径仍依赖桌面应用允许覆盖运行时，正式版 Kimi 3.2.21、3.2.22 对旧路径报告 `unsupported / packaged_bundle_override_disabled` 或明确的不兼容原因。思考翻译仍需 Work 渲染器回执。Kimi Code 不适用。
+需要先安装普通 Kimi 桌面应用，以及 **Node.js 20+（包含 npm）**。独立版不需要 Git、Magpie 或额外安装 Bun；使用已有 Bun 时要求 1.4.2+。兼容检查依据解析器、原生配置与运行时结构，不以版本号白名单决定。新的原生子代理池需显式启用配置同步；旧副本路径仍依赖桌面应用允许覆盖运行时，正式版 Kimi 3.2.21、3.2.22 对旧路径报告 `unsupported / packaged_bundle_override_disabled` 或明确的不兼容原因。思考翻译仍需渲染器回执：Work 页面或 Chat 页面确认引擎在运行后才显示生效。Kimi Code 不适用。
 
 ### 1. 一条命令安装
 
-0.8.0 提供自动配置与后台恢复。下载后核对发行附件 `SHA256SUMS`，再按下面的固定版本地址安装；旧版安装结果不能作为此流程的验证。
+0.9.0 提供自动配置与后台恢复。下载后核对发行附件 `SHA256SUMS`，再按下面的固定版本地址安装；旧版安装结果不能作为此流程的验证。
 
 macOS 终端：
 
 ```sh
-npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.8.0/kimi-work-gateway-0.8.0.tgz"
+npm install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.9.0/kimi-work-gateway-0.9.0.tgz"
 ```
 
 Windows PowerShell：
 
 ```powershell
-npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.8.0/kimi-work-gateway-0.8.0.tgz"
+npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-gateway/releases/download/v0.9.0/kimi-work-gateway-0.9.0.tgz"
 ```
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
@@ -141,9 +141,13 @@ kimi-work-gateway panel --config gateway.json
 }
 ```
 
-翻译设置由面板提供，`panel`、后台服务及配置了翻译的 `serve` 都使用同一接入监督机制。只有 Work 渲染器确认后才显示生效。页面提供 **译文 / 原文 / 重译**，折叠随原思考区域同步，停用后恢复原文。关闭浏览器不影响翻译；网关退出不强杀现有 Kimi，恢复相同状态目录后继续监督。Kimi 主动退出后当前宿主结束，后台等待下一次打开；更新后的普通启动会重新检查并恢复。
+翻译设置由面板提供，`panel`、后台服务及配置了翻译的 `serve` 都使用同一接入监督机制。只有渲染器确认后才显示生效。页面提供 **译文 / 原文 / 重译**，折叠随原思考区域同步，停用后恢复原文。关闭浏览器不影响翻译；网关退出不强杀现有 Kimi，恢复相同状态目录后继续监督。Kimi 主动退出后当前宿主结束，后台等待下一次打开；更新后的普通启动会重新检查并恢复。
 
-翻译按普通 Kimi Work 页面的私有管道、渲染器协议和 DOM 结构确认能力；版本号仅展示，未知版本会标记待验证，不因版本号拒绝启动。不适用于 Kimi Code。它不暴露调试 TCP 端口、不提供任意脚本 HTTP 接口、不修改安装包或签名。流式正文稳定后才发起翻译，并提供匹配块计数用于识别界面结构变化。重复注入时，网关先释放有 `dispose()` 的 v4 旧引擎；无法安全释放的 v3 保持 `legacy-running`。旧启动器发现网关引擎后让位。原文和译文仅在页面有界内存中缓存，不写入 localStorage 或网关状态文件。翻译 Key、上游 Key 与本地 Token 不传给 Kimi 子进程；结构环境变量不能作为翻译 Key 名称。
+同一套翻译引擎与设置覆盖两处可见思考：Work 页面的思考块，以及 Chat 页面（`https://www.kimi.com` 的对话、历史与根路由）中已展开的思考内容。默认仍然关闭，沿用同一个开关、服务与目标语言；不修改模型上下文、不修改消息存储，只翻译页面上已经显示出来的思考文本。
+
+Chat 页面与 Work 的结构不同，引擎按页面实际契约工作：折叠状态由思考块根节点的 `is-expanded` 决定，折叠时正文虽然仍留在 DOM 中但不会发送；流式进行中（`.resize-container.enable-grow-animation`）不发送，只有稳定后才请求一次；展开后可切换原文与译文，折叠时两者都不显示。Chat 是单页应用，切换到设置、会员或插件等页面时会立即撤销注入、移除镜像并丢弃在途回复；跨域离开同样如此，旧文档的迟到回复不会被注入新页面。
+
+翻译按页面的私有管道、渲染器协议和 DOM 结构确认能力；版本号仅展示，未知版本会标记待验证，不因版本号拒绝启动。不适用于 Kimi Code。只有 Work 页面与已确认的 Chat origin 与路由会收到注入：iframe、worker、外观相似的域名（如 `www.kimi.com.evil.test`）、同站的设置与会员页面一律拒绝。注入与绑定都限定在页面主 frame 的主 world：子 frame 与隔离世界的调用会被直接丢弃，目标查询失败时本次翻译请求直接拒绝而不是沿用上一次的位置快照，每次请求还会在被固定的那个 world 中复核实际位置与是否顶层页面；页面主 frame 导航后旧的在途请求与回复一并作废。保存设置或页面加载完成只会让翻译引擎重新确认，不会丢弃仍然有效的主 world，因此不会出现“设置保存后翻译静默失效”。它不暴露调试 TCP 端口、不提供任意脚本 HTTP 接口、不修改安装包或签名。流式正文稳定后才发起翻译，并提供匹配块计数与结构状态（`none` 空会话 / `partial` 结构漂移 / `matched`），用于区分“页面还没打开思考”与“界面结构已变化”；面板会按 Work 与 Chat 分别显示这一状态。重复注入时，网关先释放有 `dispose()` 的 v4 旧引擎；无法安全释放的 v3 保持 `legacy-running`。旧启动器发现网关引擎后让位。原文和译文仅在页面有界内存中缓存，不写入 localStorage 或网关状态文件。翻译 Key、上游 Key 与本地 Token 不传给 Kimi 子进程；结构环境变量不能作为翻译 Key 名称。
 
 ## 跨版本与 GitHub 更新
 
@@ -249,7 +253,7 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 | 网页搜索、抓取 | 独立工具服务 | 聊天模型不能直接替代；兼容搜索服务可由原生 services 配置提供，但本工具未管理该配置 |
 | 生图、宠物渲染 | 独立媒体服务 | 不随聊天模型选择切换，未提供第三方生图设置 |
 | 语音听写 | 腾讯云 ASR，经 Kimi 获取凭证 | 不随聊天模型选择切换，未提供第三方 ASR 设置 |
-| 思考翻译 | 本网关独立翻译设置 | 可使用自定义 Chat Completions，见上文 |
+| 思考翻译 | 本网关独立翻译设置 | 覆盖 Work 思考块与 Chat 页面已展开的思考；可使用自定义 Chat Completions，见上文 |
 
 这份边界来自对本机 Work 3.2.21 与 3.2.22 调用路径的检查；服务端实现与未来应用版本可能变化。代码中存在某个供应商 SDK，不等于该功能已经开放给用户。
 

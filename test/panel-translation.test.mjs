@@ -10,6 +10,7 @@ import { PanelController } from '../src/panel-controller.mjs';
 import { GatewayPanel } from '../src/panel.mjs';
 import { SubagentPolicy, readSubagentJSON, writeSubagentJSON } from '../src/subagent-policy.mjs';
 import { normalizeTranslationConfig } from '../src/translation-config.mjs';
+import { publicSurfaces } from '../src/translation-runtime.mjs';
 
 const fixtures = [];
 const intent = action => ({ id: crypto.randomUUID(), at: Date.now(), action });
@@ -115,6 +116,28 @@ test('translation API preserves unrelated fields and returns only environment av
   expect(readSubagentJSON(f.file).kept).toEqual(f.document.kept);
   expect(f.translation.settings).toEqual(state.translation.configured);
   expect(f.calls).toHaveLength(0);
+});
+
+// The panel is where "no reasoning on screen yet" and "the selectors drifted"
+// have to be told apart; both used to render as a plain "injected". The shape is
+// sanitized by TranslationRuntime (see translation-runtime.test.mjs); here it
+// has to survive into the panel state and nothing else may come along.
+test('the panel exposes per-surface state and never the raw internal status object', async () => {
+  const f = await fixture({ translationRuntime: { configure() {}, check: () => ({ state: 'not-started' }),
+    inspect: () => ({ state: 'active', internal: 'hidden',
+      surfaces: publicSurfaces({ chat: { state: 'active', structure: 'none', blocks: 0, seenBlocks: 0 },
+        work: { state: 'active', structure: 'partial', blocks: 1, seenBlocks: 3, internal: 'hidden' } }) }) } });
+  const state = await f.controller.state();
+  expect(state.translation.runtime).toEqual({ state: 'active', surfaces: {
+    chat: { state: 'active', structure: 'none', blocks: 0, seenBlocks: 0 },
+    work: { state: 'active', structure: 'partial', blocks: 1, seenBlocks: 3 } } });
+  expect(state.translation.runtime.surfaces.work.internal).toBeUndefined();
+  expect(state.translation.runtime.internal).toBeUndefined();
+
+  // An older runtime with no surfaces field keeps the previous shape.
+  const plain = await fixture({ translationRuntime: { configure() {}, check: () => ({ state: 'not-started' }),
+    inspect: () => ({ state: 'active' }) } });
+  expect((await plain.controller.state()).translation.runtime).toEqual({ state: 'active' });
 });
 
 test('translation writes reject foreign requests, invalid settings and stale revisions without changing files', async () => {

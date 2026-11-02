@@ -91,6 +91,35 @@ test('structural and runtime environment names are rejected as the translation k
     .toBe('MY_TRANSLATOR_KEY_2');
 });
 
+// Per-surface state is what lets the panel say "Chat is attached but shows no
+// reasoning yet" instead of a generic "injected". It is rebuilt from an
+// allowlist, so a receipt written by another version cannot smuggle arbitrary
+// structure into the panel state, and a missing field stays missing.
+test('per-surface state reaches the inspection sanitized, and older receipts still work', () => {
+  const { runtime } = fixture({ isAlive: pid => pid === 4242 });
+  const desired = readTranslationSettings(runtime.settingsFile, runtime.homeDir);
+  const receipt = { schemaVersion: 1, id: crypto.randomUUID(), homeDir: runtime.homeDir, pid: 4242,
+    version: '3.2.21', revision: desired.revision, state: 'active', at: Date.now(),
+    surfaces: { chat: { state: 'active', structure: 'none', blocks: 0, seenBlocks: 0, injected: 77 },
+      work: { state: 'active', structure: 'partial', blocks: 1, seenBlocks: 3, secret: 'x' },
+      other: { state: 'active' } } };
+  writeSubagentJSON(runtime.receiptFile, receipt);
+  const status = runtime.inspect();
+  expect(status.state).toBe('active');
+  expect(status.surfaces).toEqual({ chat: { state: 'active', structure: 'none', blocks: 0, seenBlocks: 0 },
+    work: { state: 'active', structure: 'partial', blocks: 1, seenBlocks: 3 } });
+
+  // Unknown states and non-numeric counts are dropped rather than forwarded.
+  writeSubagentJSON(runtime.receiptFile, { ...receipt,
+    surfaces: { chat: { state: 'unknown', structure: 'none' }, work: { state: 'active', structure: 'bogus', blocks: -1 } } });
+  expect(runtime.inspect().surfaces).toEqual({ work: { state: 'active' } });
+
+  // A receipt from before this field existed is simply unaffected.
+  writeSubagentJSON(runtime.receiptFile, { ...receipt, surfaces: undefined });
+  expect(runtime.inspect()).toMatchObject({ state: 'active' });
+  expect(runtime.inspect().surfaces).toBeUndefined();
+});
+
 test('configuration and receipts are scoped and only fresh renderer evidence reports active', () => {
   const { runtime } = fixture({ isAlive: pid => pid === 4242 });
   expect(runtime.inspect().state).toBe('not-started');
