@@ -138,6 +138,7 @@ export class TranslationSession {
   // enabled, so re-enabling after clearing our own record would lose a world
   // that is still perfectly valid.
   dropWorld(entry) {
+    this.releaseInjection(entry);
     entry.mainContexts.clear();
     entry.mainContextId = undefined;
     entry.mainContextUniqueId = undefined;
@@ -148,6 +149,9 @@ export class TranslationSession {
   // tick re-injects into the same world under a new generation, and anything the
   // previous document issued can no longer be delivered.
   invalidateAck(entry) {
+    // The receipt of an injection in flight can no longer describe this entry,
+    // so its waiters are released now rather than when that evaluation returns.
+    this.releaseInjection(entry);
     entry.generation = (entry.generation ?? 0) + 1;
     entry.pendingContext?.clear();
     entry.revision = null;
@@ -162,6 +166,52 @@ export class TranslationSession {
   // cancelled so the concurrency slots are free for the page that replaced it.
   retire(entry) {
     this.invalidateAck(entry);
+  }
+
+  // The handshake between an injection and the first request that injection
+  // produces.
+  //
+  // A renderer scans inside the very evaluation that installs it, so its first
+  // binding call can reach the host before that evaluation's reply does. At that
+  // moment the host has not confirmed the world, and it deliberately does not
+  // open the entry early: instead the request waits for the handshake record of
+  // the injection it belongs to. Only the receipt at the end of `inject` opens
+  // it; failing, being superseded, losing the world or losing the pipe releases
+  // the wait so a request can never hang, reach the provider, or be answered
+  // for a page the host never confirmed.
+  settleInjection(entry, injection, acknowledged = false) {
+    if (!injection || injection.settled) return;
+    injection.settled = true;
+    injection.acknowledged = acknowledged === true;
+    if (entry.injection === injection) entry.injection = null;
+    for (const settle of [...injection.waiters]) settle(injection.acknowledged);
+    injection.waiters.clear();
+  }
+
+  releaseInjection(entry) {
+    this.settleInjection(entry, entry.injection, false);
+  }
+
+  releaseInjections() {
+    for (const entry of this.sessions.values()) this.releaseInjection(entry);
+  }
+
+  // The pending injection a binding call belongs to, or null when the call is
+  // an ordinary one. The generation and the world have to be the ones being
+  // injected: a call from any other page state is stale, and waiting for a
+  // receipt that will never describe it would only delay that decision.
+  startupInjection(entry, input, contextId) {
+    const injection = entry.injection;
+    if (!injection || injection.settled || this.live.has(entry)) return null;
+    if (!Number.isInteger(injection.generation) || input.generation !== injection.generation) return null;
+    return injection.contextId === contextId ? injection : null;
+  }
+
+  // Resolves true only if the injection was acknowledged. Never rejects: a
+  // request that cannot be served is dropped silently, never answered.
+  waitForInjection(entry, injection) {
+    if (!injection || injection.settled) return Promise.resolve(injection?.acknowledged === true);
+    return new Promise(resolve => { injection.waiters.add(resolve); });
   }
 
   // `contextId` pins an evaluation to one execution world. It is used wherever
@@ -269,6 +319,9 @@ export class TranslationSession {
 
   dropContext(entry, id) {
     if (!Number.isInteger(id)) return;
+    // The world an injection was waiting on is gone; a receipt that names it
+    // would describe a document that no longer exists.
+    if (entry.injection && entry.injection.contextId === id) this.releaseInjection(entry);
     entry.mainContexts.delete(id);
     if (entry.mainContextId === id) {
       entry.mainContextId = undefined;
@@ -283,8 +336,23 @@ export class TranslationSession {
     // document — a queued task, an in-flight request, a reply on the wire — is
     // retired so it cannot paint into the page that is now attached. The world
     // identity is deliberately left alone; only real evidence drops it.
+    this.releaseInjection(entry);
     entry.generation = (entry.generation ?? 0) + 1;
+    const injection = { generation: entry.generation, contextId: undefined, waiters: new Set(),
+      settled: false, acknowledged: false };
+    entry.injection = injection;
     this.live.delete(entry);
+    try {
+      await this.attachAndConfirm(entry, injection);
+    } catch (error) {
+      // A failed injection confirms nothing: whoever waited for it is released
+      // without an answer, so the request cannot spend the provider or hang.
+      this.settleInjection(entry, injection, false);
+      throw error;
+    }
+  }
+
+  async attachAndConfirm(entry, injection) {
     for (const [key, job] of this.jobs) {
       if (key.startsWith(entry.sessionId + ':')) { job.abort(); this.jobs.delete(key); }
     }
@@ -308,6 +376,7 @@ export class TranslationSession {
     }
     const contextId = await this.waitForMainContext(entry);
     if (!Number.isInteger(contextId)) throw Error('translation_renderer_unconfirmed');
+    injection.contextId = contextId;
     // The binding lives as long as the world it was registered in.
     if (entry.bindingContextId !== contextId) {
       await this.pipe.send('Runtime.addBinding', { name: '__kwgTranslate', executionContextId: contextId }, entry.sessionId);
@@ -326,6 +395,13 @@ export class TranslationSession {
     // host classified, or a frame masquerading as the page, must never be
     // counted as an attached translation.
     if (result.surface !== entry.surface || result.top !== true) throw Error('translation_renderer_unconfirmed');
+    // A navigation, load or cleared world during the evaluation already retired
+    // this injection and moved the entry to a new generation. Its receipt
+    // describes the document that was replaced, so it is not accepted: the next
+    // tick injects the page that is there now, and the waiters were released
+    // when the entry was invalidated rather than by an acknowledgement that
+    // belongs to nobody.
+    if (entry.injection !== injection || entry.generation !== injection.generation) return false;
     entry.state = result.state;
     entry.structure = result.structure;
     entry.blocks = result.blocks;
@@ -333,6 +409,9 @@ export class TranslationSession {
     entry.revision = this.revision;
     entry.injectedUrl = entry.targetUrl;
     this.live.add(entry);
+    // The waiters still see the acknowledged entry through `verifyEntry` when
+    // they resume, including the world this injection settled on.
+    this.settleInjection(entry, injection, true);
   }
 
   // Waits for the main frame's default world to be reported, bounded by an
@@ -408,6 +487,14 @@ export class TranslationSession {
     if (!input || input.type !== 'translate' || typeof input.id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(input.id)) return;
     const reject = code => this.reply(entry, input.id, { error: code });
     if (!this.settings.enabled) { await reject('translation_disabled'); return; }
+    // The renderer scans inside the evaluation that installs it, so its first
+    // request can arrive before the host has its receipt. Holding it here — bound
+    // to that exact injection, generation and world — is what turns the first
+    // visible thinking block into a real translation instead of a silent
+    // `!live` drop. A request of any other document state is not held, so
+    // nothing stale is queued behind an acknowledgement it does not belong to.
+    const startup = this.startupInjection(entry, input, contextId);
+    if (startup && !await this.waitForInjection(entry, startup)) return;
     // The page a binding call arrives from is verified every time, not once at
     // attach: a target keeps its session across navigations, so the surface that
     // was classified when the entry was created may be a different page now.
@@ -507,6 +594,9 @@ export class TranslationSession {
   async detachAll() {
     const disabled = publicSettings({ ...this.settings, enabled: false });
     for (const entry of this.sessions.values()) {
+      // Translation is being withdrawn: nobody may stay queued behind an
+      // acknowledgement that is about to be revoked.
+      this.releaseInjection(entry);
       await this.evaluate(entry.sessionId,
         'globalThis.__kwgTranslation?.configure(' + JSON.stringify(disabled) + ')').catch(() => {});
       if (entry.scriptId) {
@@ -768,6 +858,8 @@ export class TranslationSession {
         stop();
         this.status = 'failed'; this.reason = reason;
         for (const job of this.jobs.values()) job.abort();
+        // No receipt can arrive on a disposed pipe, so nobody keeps waiting.
+        this.releaseInjections();
         try { this.record(); } catch {}
       });
       timer = setInterval(() => { void this.update(); }, this.interval);
@@ -781,6 +873,7 @@ export class TranslationSession {
       stop();
       this.stopped = true;
       for (const job of this.jobs.values()) job.abort();
+      this.releaseInjections();
       // The bridge must stop before the pipe goes away: it owns HTTP listeners
       // and the descriptor that native-import.mjs reads.
       await this.bridge?.close().catch(() => {});
