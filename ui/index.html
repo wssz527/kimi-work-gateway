@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex, nofollow">
-<title>Kimi Work 网关 · 控制面板</title>
+<title>Kimi++ · 控制面板</title>
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -44,8 +44,8 @@
         <circle cx="16.6" cy="14.5" r="1.6" class="brand__dot"/>
       </svg>
       <div class="brand__text">
-        <p class="brand__name">Kimi Work</p>
-        <p class="brand__sub">网关控制面板</p>
+        <p class="brand__name">Kimi<sup class="brand__plus">++</sup></p>
+        <p class="brand__sub">本机控制面板</p>
       </div>
     </div>
 
@@ -69,7 +69,7 @@
       </button>
       <button class="nav__item" id="nav-connection" type="button">
         <svg class="icon" aria-hidden="true"><use href="#i-plug"/></svg>
-        <span>连接与诊断</span>
+        <span>连接与工具</span>
       </button>
     </nav>
 
@@ -185,8 +185,39 @@
 
       <div class="panel">
         <div class="panel__head">
+          <h2>路由与上下文</h2>
+          <p>每个模型实际发往哪个连接与上游模型，以及原生上下文整理策略的保存与生效状态。</p>
+        </div>
+        <dl class="facts facts--compact">
+          <div class="fact">
+            <dt>连接</dt>
+            <dd id="fact-connections">…</dd>
+            <p class="fact__sub" id="fact-connections-sub">…</p>
+          </div>
+          <div class="fact">
+            <dt>当前路由</dt>
+            <dd class="mono" id="fact-route">…</dd>
+            <p class="fact__sub" id="fact-route-sub">…</p>
+          </div>
+          <div class="fact">
+            <dt>上下文整理</dt>
+            <dd><span class="dot" id="fact-context-dot" data-tone="neutral"></span><span id="fact-context">…</span></dd>
+            <p class="fact__sub" id="fact-context-sub">…</p>
+          </div>
+          <div class="fact">
+            <dt>原生工具</dt>
+            <dd><span class="dot" id="fact-tools-dot" data-tone="neutral"></span><span id="fact-tools">…</span></dd>
+            <p class="fact__sub" id="fact-tools-sub">…</p>
+          </div>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel__head">
           <h2>推理流量</h2>
-          <p>本进程启动以来的真实计数，不含费用估算。</p>
+          <p>本进程启动以来的真实计数与实测耗时；不估算费用，未观测到的用量不显示为 0。
+            平均输出速率按整个请求的耗时计算，含等待首字节的时间，并非模型逐字生成的速度。
+            「上次请求输入」是该次请求的输入 token 占已设上下文预算的比例，不代表距上游硬上限还有多少。</p>
         </div>
         <dl class="metrics">
           <div class="metric"><dt>请求</dt><dd class="mono" id="metric-requests">0</dd></div>
@@ -199,9 +230,13 @@
               <tr>
                 <th scope="col">时间</th>
                 <th scope="col">模型</th>
-                <th scope="col">协议</th>
+                <th scope="col" class="col-proto">协议</th>
                 <th scope="col" class="num">状态</th>
-                <th scope="col" class="num">耗时</th>
+                <th scope="col" class="num col-firstbyte">首字节</th>
+                <th scope="col" class="num col-total">总耗时</th>
+                <th scope="col" class="num col-rate">平均输出速率</th>
+                <th scope="col" class="num col-usage">用量</th>
+                <th scope="col" class="num col-reqctx">上次请求输入</th>
               </tr>
             </thead>
             <tbody id="recent-body"></tbody>
@@ -240,8 +275,9 @@
             <thead>
               <tr>
                 <th scope="col">模型 ID</th>
+                <th scope="col" class="col-route">连接 · 上游</th>
                 <th scope="col" class="col-proto">协议</th>
-                <th scope="col" class="num">上下文</th>
+                <th scope="col" class="num">上下文预算</th>
                 <th scope="col" class="num col-out">输出</th>
                 <th scope="col" class="col-cap">能力</th>
                 <th scope="col" class="col-efforts">思考档位</th>
@@ -265,30 +301,58 @@
             </button>
           </div>
           <form class="inspector__form" id="model-form" novalidate>
-            <label class="field">
-              <span class="field__label">模型 ID</span>
-              <input id="m-id" class="mono" autocomplete="off" spellcheck="false" placeholder="group/deepseek-v4-1-flash">
-              <span class="field__hint" id="m-id-hint">末段以 kimi- 开头时必须使用 Chat 协议，其他使用 Responses。</span>
+            <div class="field" id="m-source-field">
+              <span class="field__label">来源</span>
+              <div class="source-row">
+                <select id="m-connection" aria-label="所属连接"></select>
+                <button class="btn btn--outline btn--sm" id="m-candidates" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>从上游目录选择
+                </button>
+              </div>
+              <span class="field__hint" id="m-connection-hint">连接决定请求发往哪个上游；未选择时沿用旧版单上游设置。</span>
+            </div>
+            <label class="field" for="m-id">
+              <span class="field__label">模型 ID（本机路由）</span>
+              <input id="m-id" class="mono" autocomplete="off" spellcheck="false" placeholder="conn-id/resp/deepseek-v4-1-flash">
+              <span class="field__hint" id="m-id-hint">末段以 kimi- 开头时推导为 Chat 协议，其他推导为 Responses；推导冲突时此处会说明。</span>
             </label>
-            <label class="field">
+            <label class="field" for="m-upstream">
+              <span class="field__label">上游模型 ID</span>
+              <input id="m-upstream" class="mono" autocomplete="off" spellcheck="false" placeholder="deepseek-v4-1-flash">
+              <span class="field__hint" id="m-upstream-hint">实际发给上游的 model 值，按原样保留大小写与分隔符；留空表示与路由 ID 相同。</span>
+            </label>
+            <label class="field" for="m-name">
               <span class="field__label">显示名称（可选）</span>
               <input id="m-name" autocomplete="off" spellcheck="false">
             </label>
             <div class="field">
               <span class="field__label">协议</span>
-              <p class="field__static mono" id="m-protocol">—</p>
-              <span class="field__hint">由模型 ID 决定，不能单独声明。</span>
+              <div class="segmented" id="m-protocol-group" role="group" aria-label="接口协议">
+                <button id="m-proto-responses" type="button" data-protocol="responses" aria-pressed="false">Responses</button>
+                <button id="m-proto-chat" type="button" data-protocol="chat" aria-pressed="false">Chat Completions</button>
+              </div>
+              <span class="field__hint" id="m-protocol-hint">由当前路由 ID 末段推导；上游声明或连接限制不同时会在这里给出结论与所需协议。</span>
             </div>
-            <div class="field-row">
-              <label class="field">
-                <span class="field__label">上下文窗口</span>
-                <input id="m-context" type="number" inputmode="numeric" min="1" step="1">
-              </label>
-              <label class="field">
-                <span class="field__label">最大输出（可选）</span>
-                <input id="m-output" type="number" inputmode="numeric" min="1" step="1">
-              </label>
+            <div class="field">
+              <span class="field__label">上下文预算</span>
+              <div class="segmented segmented--budget" id="m-budget-group" role="group" aria-label="上下文预算">
+                <button id="m-budget-256" type="button" data-budget="256k" aria-pressed="false">256K</button>
+                <button id="m-budget-350" type="button" data-budget="350k" aria-pressed="false">350K</button>
+                <button id="m-budget-600" type="button" data-budget="600k" aria-pressed="false">600K</button>
+                <button id="m-budget-full" type="button" data-budget="full" aria-pressed="false">完整</button>
+              </div>
+              <div class="field-row">
+                <label class="field">
+                  <span class="field__label sr-only">上下文预算数值</span>
+                  <input id="m-context" type="number" inputmode="numeric" min="1" step="1" placeholder="262144">
+                </label>
+                <p class="field__hint field__hint--inline" id="m-context-hint">未提供上游上限时按手填值保存。</p>
+              </div>
             </div>
+            <label class="field" for="m-output">
+              <span class="field__label">最大输出（可选）</span>
+              <input id="m-output" type="number" inputmode="numeric" min="1" step="1">
+            </label>
             <fieldset class="field field--group">
               <legend class="field__label">声明能力</legend>
               <label class="check"><input type="checkbox" id="m-tools"><span>支持工具调用（可作为子代理）</span></label>
@@ -302,7 +366,7 @@
               <span class="field__hint">逗号分隔的小写标识符，例如 low, medium, high, xhigh。只填写上游真实支持的档位。</span>
               <div class="chips" id="m-effort-chips"></div>
             </div>
-            <label class="field">
+            <label class="field" for="m-default">
               <span class="field__label">默认档位</span>
               <select id="m-default"><option value="">自动</option></select>
               <span class="field__hint">必须是上面列出的档位之一。</span>
@@ -317,7 +381,104 @@
         </aside>
       </div>
 
+      <div class="picker" id="picker" hidden aria-labelledby="picker-title">
+        <div class="picker__head">
+          <div>
+            <h2 id="picker-title">候选模型</h2>
+            <p class="picker__lede" id="picker-lede">候选来自所选供应商目录与连接最近一次上游读取；输入关键词会由服务端按别名与片段检索。点选只填上游模型 ID 与已知能力，协议若未声明仍需你手动确认。</p>
+          </div>
+          <button class="iconbtn" id="picker-close" type="button" aria-label="关闭候选列表">
+            <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+          </button>
+        </div>
+        <div class="picker__search">
+          <div class="search">
+            <svg class="icon search__icon" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="picker-q" type="search" placeholder="输入模型名、厂商或片段，例如 glm 5.3" autocomplete="off" spellcheck="false" aria-label="搜索候选模型">
+          </div>
+          <button class="btn btn--outline" id="picker-scan" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>读取上游目录
+          </button>
+          <p class="picker__state mono" id="picker-state" role="status">—</p>
+        </div>
+        <p class="note note--warn" id="picker-note" hidden></p>
+        <ul class="picker__list" id="picker-list"></ul>
+        <p class="empty" id="picker-empty" hidden>
+          <span class="empty__title" id="picker-empty-title">没有候选</span>
+          <span class="empty__note" id="picker-empty-note">选择一条连接或供应商预设后，候选会自动载入。</span>
+        </p>
+      </div>
+
       <p class="hint" id="models-note">模型目录保存后立即应用；Kimi 自带目录需要重新测试导入。删除正在被子代理使用的模型会先被拒绝。</p>
+
+      <div class="panel" id="context-panel">
+        <div class="panel__head">
+          <h2>上下文整理</h2>
+          <p>写入 Kimi 原生配置的整理触发阈值与预留预算；保存成功不等于正在运行的会话已经采用，需由新会话读取。</p>
+        </div>
+
+        <p class="note note--warn" id="ctx-unavailable" hidden>当前面板服务没有提供上下文策略接口，此处只显示状态，不能保存。其余功能不受影响。</p>
+
+        <fieldset class="choices" id="ctx-modes">
+          <label class="choice">
+            <input type="radio" name="ctx-mode" id="ctx-mode-inherit" value="inherit">
+            <span class="choice__body">
+              <span class="choice__title">保持 Kimi 原生默认</span>
+              <span class="choice__note">不写入任何整理阈值，由 Kimi 自己决定何时整理上下文。</span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="ctx-mode" id="ctx-mode-custom" value="custom">
+            <span class="choice__body">
+              <span class="choice__title">指定触发阈值</span>
+              <span class="choice__note">按上下文占用比例触发原生整理，并可预留一段空间。</span>
+            </span>
+          </label>
+        </fieldset>
+
+        <div class="field-row" id="ctx-fields">
+          <label class="field" for="ctx-ratio">
+            <span class="field__label">触发阈值</span>
+            <div class="pct">
+              <input id="ctx-ratio" type="number" inputmode="numeric" min="50" max="99" step="1" aria-describedby="ctx-ratio-hint">
+              <span class="pct__unit">%</span>
+            </div>
+            <span class="field__hint" id="ctx-ratio-hint">可填 50–99%。数值越高越晚整理；这是触发阈值，不是整理后的目标占用。</span>
+          </label>
+          <label class="field" for="ctx-reserved">
+            <span class="field__label">预留预算（tokens）</span>
+            <input id="ctx-reserved" type="number" inputmode="numeric" min="0" step="1" placeholder="0">
+            <span class="field__hint" id="ctx-reserved-hint">留出不被上下文占用的 token 数，0 表示不预留。</span>
+          </label>
+        </div>
+
+        <div class="binding binding--context">
+          <div class="binding__col">
+            <p class="binding__label">已保存</p>
+            <p class="binding__value" id="ctx-saved">…</p>
+            <p class="binding__sub" id="ctx-saved-sub">…</p>
+          </div>
+          <div class="binding__col">
+            <p class="binding__label">原生配置观测</p>
+            <p class="binding__value" id="ctx-observed">…</p>
+            <p class="binding__sub" id="ctx-observed-sub">…</p>
+          </div>
+        </div>
+
+        <p class="verdict" id="ctx-verdict">
+          <span class="dot" id="ctx-verdict-dot" data-tone="neutral"></span>
+          <strong id="ctx-verdict-word">读取中</strong>
+          <span class="verdict__note" id="ctx-verdict-note"></span>
+        </p>
+        <p class="errors" id="ctx-errors" hidden></p>
+
+        <div class="panel__actions">
+          <p class="draft" id="ctx-draft">—</p>
+          <button class="btn btn--quiet" id="ctx-reset" type="button">还原为已保存值</button>
+          <button class="btn btn--primary" id="ctx-save" type="button" disabled>保存整理策略</button>
+        </div>
+        <p class="hint" id="ctx-note">本面板不承诺整理后的目标占比；Kimi 原生只公开触发比例。</p>
+      </div>
     </section>
 
     <section class="view" id="view-subagents" aria-labelledby="subagents-heading" hidden>
@@ -353,12 +514,12 @@
         </fieldset>
 
         <div class="field-row" id="sa-force-fields">
-          <label class="field">
+          <label class="field" for="sa-model">
             <span class="field__label">模型</span>
             <select id="sa-model"></select>
             <span class="field__hint" id="sa-model-hint">只列出声明支持工具调用的模型。</span>
           </label>
-          <label class="field">
+          <label class="field" for="sa-effort">
             <span class="field__label">思考档位</span>
             <select id="sa-effort"></select>
             <span class="field__hint" id="sa-effort-hint">只列出该模型声明的档位。</span>
@@ -559,10 +720,93 @@
     </section>
 
     <section class="view" id="view-connection" aria-labelledby="connection-heading" hidden>
-      <div class="panel">
+      <div class="panel" id="connections-panel">
         <div class="panel__head">
-          <h2 id="connection-heading">上游连接</h2>
-          <p>这里编辑配置文件中的值；保存后需要重启面板才会生效。</p>
+          <h2 id="connection-heading">连接</h2>
+          <p>每条连接是一个独立上游；API Key 只写入本机私有凭据文件，保存后需重启面板才会生效。</p>
+        </div>
+
+        <p class="note note--warn" id="conns-unavailable" hidden>当前面板服务尚未提供多连接接口。这里仍可编辑旧版单上游设置。</p>
+
+        <ul class="conns" id="conns-list"></ul>
+        <p class="empty" id="conns-empty" hidden>
+          <span class="empty__title">还没有连接</span>
+          <span class="empty__note">添加一条连接并填写上游地址与 API Key，然后保存。</span>
+        </p>
+
+        <div class="conn-editor" id="conn-editor" hidden aria-labelledby="conn-editor-title">
+          <div class="conn-editor__head">
+            <h3 id="conn-editor-title">编辑连接</h3>
+            <button class="iconbtn" id="conn-editor-close" type="button" aria-label="取消编辑">
+              <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+            </button>
+          </div>
+          <div class="field-row">
+            <label class="field" for="ce-name">
+              <span class="field__label">显示名称</span>
+              <input id="ce-name" autocomplete="off" spellcheck="false" placeholder="DeepSeek 官方">
+              <span class="field__hint" id="ce-name-hint">仅用于本机辨认，可随时修改。</span>
+            </label>
+            <label class="field" for="ce-id">
+              <span class="field__label">标识</span>
+              <input id="ce-id" class="mono" autocomplete="off" spellcheck="false" placeholder="deepseek">
+              <span class="field__hint">用于路由 ID 前缀，保存后不建议修改；只能是字母、数字、点、下划线与连字符。</span>
+            </label>
+          </div>
+          <label class="field" for="ce-preset">
+            <span class="field__label">供应商预设（可选）</span>
+            <select id="ce-preset"></select>
+            <span class="field__hint" id="ce-preset-hint">选择预设会填入官方地址与已知能力；仍可改为自定义地址。</span>
+          </label>
+          <label class="field" for="ce-base">
+            <span class="field__label">上游地址</span>
+            <input id="ce-base" class="mono" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1">
+            <span class="field__hint">必须使用 HTTPS；本机回环地址可用 HTTP。不能包含账号、密码、查询参数或片段。</span>
+          </label>
+          <div class="field-row">
+            <label class="field" for="ce-key">
+              <span class="field__label">API Key</span>
+              <input id="ce-key" class="mono" type="password" autocomplete="off" spellcheck="false" aria-describedby="ce-key-hint">
+              <span class="field__hint" id="ce-key-hint">已保存的 Key 不会显示。留空表示保持现有值；新连接必须填写。</span>
+            </label>
+            <label class="field" for="ce-keyenv">
+              <span class="field__label">Key 变量名（可选）</span>
+              <input id="ce-keyenv" class="mono" autocomplete="off" spellcheck="false" placeholder="自动生成">
+              <span class="field__hint">留空时按连接标识自动生成，只保存变量名，凭证值不进入配置。</span>
+            </label>
+          </div>
+          <fieldset class="field field--group">
+            <legend class="field__label">允许的协议</legend>
+            <label class="check"><input type="checkbox" id="ce-chat"><span>Chat Completions</span></label>
+            <label class="check"><input type="checkbox" id="ce-responses"><span>Responses</span></label>
+            <p class="field__hint">都不勾选表示不限制；限制后该连接下协议不符的模型会被拒绝，不会静默改写。</p>
+          </fieldset>
+          <div class="panel__actions panel__actions--start">
+            <button class="btn btn--quiet" id="conn-editor-cancel" type="button">取消</button>
+            <button class="btn btn--outline" id="conn-editor-test" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>读取上游目录
+            </button>
+            <button class="btn btn--primary" id="conn-editor-apply" type="button">加入草稿</button>
+          </div>
+        </div>
+
+        <div class="diff" id="conns-diff" hidden></div>
+        <p class="errors" id="conns-errors" hidden></p>
+
+        <div class="panel__actions">
+          <p class="draft" id="conns-draft">草稿与配置文件一致</p>
+          <button class="btn btn--quiet" id="conns-reset" type="button">还原为已保存值</button>
+          <button class="btn btn--outline" id="conns-add" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>添加连接
+          </button>
+          <button class="btn btn--primary" id="conns-save" type="button" disabled>保存连接</button>
+        </div>
+      </div>
+
+      <div class="panel" id="legacy-panel" hidden>
+        <div class="panel__head">
+          <h2>旧版单上游设置与网关</h2>
+          <p>旧配置的兼容入口；新配置请在上方用命名连接管理。端口与 DNS 仍在这里编辑。</p>
         </div>
         <form id="conn-form" novalidate>
           <label class="field">
@@ -612,16 +856,33 @@
       <div class="panel" id="restart-panel">
         <div class="panel__head">
           <h2>应用连接修改</h2>
-          <p>本面板不提供自动重启，重启由你在终端完成。</p>
+          <p id="restart-head">本面板不提供自动重启，重启由你在终端完成。</p>
         </div>
         <p class="restart__state" id="restart-state">读取中</p>
-        <ol class="steps">
+        <div id="restart-service" hidden>
+          <ol class="steps">
+            <li>在终端执行 <code id="restart-service-restart">kimi-work-gateway service restart</code>；重启由后台服务完成，页面不会执行它。</li>
+            <li>执行 <code id="restart-service-status">kimi-work-gateway service status</code> 找回新的面板链接。</li>
+            <li>链接指向的仍是本配置文件：<code id="restart-service-config">—</code>。</li>
+          </ol>
+        </div>
+        <ol class="steps" id="restart-foreground">
           <li>在运行面板的终端窗口按 <kbd>Ctrl</kbd> + <kbd>C</kbd> 结束进程。</li>
           <li>重新执行 <code>kimi-work-gateway panel --config &lt;配置文件&gt;</code>。</li>
           <li>用终端新输出的 <code>http://127.0.0.1:&lt;端口&gt;/#key=…</code> 链接打开面板。</li>
         </ol>
         <p class="hint">配置变更期间模型、子代理与翻译设置不可保存；连接可以改回当前生效值以撤销待重启的修改。</p>
         <p class="mono restart__file" id="restart-file">—</p>
+      </div>
+
+      <div class="conncheck" id="conncheck">
+        <p class="conncheck__line">
+          <span class="dot" id="diag-compat-dot" data-tone="neutral"></span>
+          <span class="conncheck__title">本机目录兼容性</span>
+          <span class="conncheck__state" id="diag-compat-state">未检查</span>
+          <span class="conncheck__meta" id="diag-compat-meta">用本机 Kimi 目录解析器试导入当前模型目录。</span>
+          <button class="btn btn--quiet btn--sm" data-action="check-compat" type="button">检查</button>
+        </p>
       </div>
 
       <div class="panel" id="update-panel">
@@ -677,24 +938,90 @@
         <p class="hint">本面板不会自动检查、下载或安装更新；下载完成后不会结束正在运行的会话，重启网关后才运行新版本。</p>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="tools-panel">
         <div class="panel__head">
-          <h2>诊断</h2>
-          <p>只验证可达性与目录兼容，不代表推理成功。</p>
+          <h2>MCP 工具</h2>
+          <p>直接管理 Kimi 原生 MCP 服务器，不依赖 Magpie，也不改动原生默认工具。列表只读取，不会启动任何进程。</p>
         </div>
-        <div class="diag-grid">
-          <div class="diag">
-            <p class="diag__title">上游连通性</p>
-            <p class="diag__state"><span class="dot" id="diag-upstream-dot" data-tone="neutral"></span><span id="diag-upstream-state">未检查</span></p>
-            <p class="diag__meta" id="diag-upstream-meta">只请求上游 GET /models，不产生推理费用。</p>
-            <button class="btn btn--outline btn--sm" data-action="check-upstream" type="button">检查上游</button>
+
+        <p class="note note--warn" id="tools-unavailable" hidden></p>
+
+        <ul class="mcp" id="tools-list"></ul>
+        <p class="empty" id="tools-empty" hidden>
+          <span class="empty__title">还没有 MCP 服务器</span>
+          <span class="empty__note">添加一个标准 stdio 或 HTTP MCP 服务器；原生默认工具保持不变。</span>
+        </p>
+
+        <div class="mcp-editor" id="tools-editor" hidden aria-labelledby="tools-editor-title">
+          <div class="mcp-editor__head">
+            <h3 id="tools-editor-title">添加 MCP 服务器</h3>
+            <button class="iconbtn" id="tools-editor-close" type="button" aria-label="取消">
+              <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+            </button>
           </div>
-          <div class="diag">
-            <p class="diag__title">本机目录兼容性</p>
-            <p class="diag__state"><span class="dot" id="diag-compat-dot" data-tone="neutral"></span><span id="diag-compat-state">未检查</span></p>
-            <p class="diag__meta" id="diag-compat-meta">用本机 Kimi 目录解析器试导入当前模型目录。</p>
-            <button class="btn btn--outline btn--sm" data-action="check-compat" type="button">检查兼容性</button>
+          <div class="field-row">
+            <label class="field" for="te-name">
+              <span class="field__label">名称</span>
+              <input id="te-name" class="mono" autocomplete="off" spellcheck="false" placeholder="filesystem">
+              <span class="field__hint" id="te-name-hint">字母或数字开头，可用点、下划线与连字符，最长 64 字符。</span>
+            </label>
+            <label class="field">
+              <span class="field__label">传输方式</span>
+              <select id="te-transport">
+                <option value="stdio">stdio（本机命令）</option>
+                <option value="http">HTTP</option>
+                <option value="sse">SSE</option>
+              </select>
+            </label>
           </div>
+          <div id="te-stdio">
+            <div class="field-row">
+              <label class="field" for="te-command">
+                <span class="field__label">命令</span>
+                <input id="te-command" class="mono" autocomplete="off" spellcheck="false" placeholder="npx">
+              </label>
+              <label class="field" for="te-args">
+                <span class="field__label">参数（每行一个）</span>
+                <textarea id="te-args" class="mono" rows="3" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/Users/me/docs"></textarea>
+              </label>
+            </div>
+            <label class="field" for="te-env">
+              <span class="field__label">环境变量（每行 NAME=值）</span>
+              <textarea id="te-env" class="mono" rows="2" spellcheck="false" placeholder="TOKEN=…"></textarea>
+              <span class="field__hint">只保存到 Kimi 原生配置；列表只回显变量名，不回显值。</span>
+            </label>
+          </div>
+          <div id="te-remote" hidden>
+            <label class="field" for="te-url">
+              <span class="field__label">服务地址</span>
+              <input id="te-url" class="mono" autocomplete="off" spellcheck="false" placeholder="https://mcp.example.com/mcp">
+              <span class="field__hint">只接受 http/https，且不能包含账号或密码。</span>
+            </label>
+            <label class="field" for="te-headers">
+              <span class="field__label">请求头（每行 Header: 值）</span>
+              <textarea id="te-headers" class="mono" rows="2" spellcheck="false" placeholder="Authorization: Bearer …"></textarea>
+              <span class="field__hint">列表只回显头名；留空表示保持现有值。</span>
+            </label>
+          </div>
+          <label class="check"><input type="checkbox" id="te-enabled" checked><span>启用此服务器</span></label>
+          <p class="errors" id="te-errors" hidden></p>
+          <div class="panel__actions panel__actions--start">
+            <button class="btn btn--quiet" id="te-cancel" type="button">取消</button>
+            <button class="btn btn--primary" id="te-save" type="button">添加到 Kimi 原生配置</button>
+          </div>
+        </div>
+
+        <p class="errors" id="tools-errors" hidden></p>
+        <p class="mcp__result" id="tools-result" role="status" hidden></p>
+
+        <div class="panel__actions">
+          <p class="hint hint--inline">「测试」是唯一会启动服务器的操作，只在你点击时执行。</p>
+          <button class="btn btn--outline" id="tools-add" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>添加 MCP 服务器
+          </button>
+          <button class="btn btn--quiet" id="tools-refresh" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>重新读取
+          </button>
         </div>
       </div>
 

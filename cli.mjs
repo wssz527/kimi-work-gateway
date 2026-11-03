@@ -12,7 +12,8 @@ import { GatewayPanel } from './src/panel.mjs';
 import { TranslationRuntime } from './src/translation-runtime.mjs';
 import { bindNativeWorkIntegration } from './src/native-work-binding.mjs';
 import { SetupServer, readCredentials, removePanelEntry,
-  setupPaths, writePanelEntry, UPSTREAM_KEY_ENV, GATEWAY_TOKEN_ENV } from './src/setup.mjs';
+  setupPaths, writePanelEntry, credentialEnvironment, requiredCredentialNames,
+  UPSTREAM_KEY_ENV, GATEWAY_TOKEN_ENV } from './src/setup.mjs';
 import { GatewayService, assertPersistableEnvironment, selectEnvironment, stableLauncherPath,
   SERVICE_LABEL } from './src/service-manager.mjs';
 import { ServiceRunner, inspectRunner, requestRunner } from './src/service-runner.mjs';
@@ -73,6 +74,13 @@ const SETUP_EXIT = { done: 0, 'resolver-conflict': 4, cancelled: 5, interrupted:
 const COMPAT_EXIT = { verified: 0, unverified: 0, unavailable: 0, incompatible: 9 };
 const SUBAGENT_INCOMPATIBLE = new Set(['subagent_runtime_incompatible', 'subagent_runtime_already_adapted', 'subagent_launch_unsupported',
   'subagent_bundle_link_conflict', 'subagent_bundle_file_conflict']);
+
+// A retained legacy block with no model routing through it must not block
+// startup: the endpoint is registered only when its key is actually present.
+function legacyEndpoint(config, env) {
+  return config.upstream && env[config.upstream.apiKeyEnv]
+    ? { baseURL: config.upstream.baseURL, apiKey: env[config.upstream.apiKeyEnv] } : {};
+}
 
 function streams(io) {
   return {
@@ -213,8 +221,9 @@ async function serveCommand(argv, env, io, overrides = {}) {
     return 2;
   }
   // `--credentials` is how a background service starts without an interactive
-  // shell. The file only supplies the two named variables; it never becomes
-  // part of the process environment of anything else, and no value is printed.
+  // shell. Each key in the file is mapped to the variable its connection names,
+  // so several upstreams can hold different credentials; the file never becomes
+  // the environment of anything else, and no value is printed.
   let runtimeEnv = env;
   if (flags.credentials) {
     let credentials;
@@ -225,21 +234,38 @@ async function serveCommand(argv, env, io, overrides = {}) {
       return 2;
     }
     if (!credentials) { io.err('kimi-work-gateway: credentials file ' + flags.credentials + ' is absent'); return 2; }
-    if (config.upstream.apiKeyEnv !== UPSTREAM_KEY_ENV || config.tokenEnv !== GATEWAY_TOKEN_ENV) {
-      io.err('kimi-work-gateway: credentials file needs ' + UPSTREAM_KEY_ENV + ' and ' + GATEWAY_TOKEN_ENV
+    if (config.tokenEnv !== GATEWAY_TOKEN_ENV) {
+      io.err('kimi-work-gateway: credentials file needs ' + GATEWAY_TOKEN_ENV
         + ' in the config; use environment variables or update the config');
       return 2;
     }
-    runtimeEnv = { ...env, [UPSTREAM_KEY_ENV]: credentials.upstreamApiKey, [GATEWAY_TOKEN_ENV]: credentials.gatewayToken };
+    if (config.upstream && credentials.upstreamApiKey && config.upstream.apiKeyEnv !== UPSTREAM_KEY_ENV) {
+      io.err('kimi-work-gateway: credentials file stores the legacy key as ' + UPSTREAM_KEY_ENV
+        + '; use environment variables or update the config');
+      return 2;
+    }
+    runtimeEnv = { ...env, ...credentialEnvironment(config, credentials) };
   }
-  const missing = [config.upstream.apiKeyEnv, config.tokenEnv].filter(name => !runtimeEnv[name]);
+  // Only the variables this configuration actually routes through are required:
+  // a connections-only gateway must not be blocked on an unused legacy key.
+  const missing = requiredCredentialNames(config).filter(name => !runtimeEnv[name]);
   if (missing.length) {
     for (const name of missing) io.err('kimi-work-gateway: missing environment variable ' + name);
     return 2;
   }
   let backend, gateway;
   try {
-    backend = new OpenAIBackend({ baseURL: config.upstream.baseURL, apiKey: runtimeEnv[config.upstream.apiKeyEnv], models: config.models });
+    // Both the legacy block and each connection are registered only when their
+    // key is actually present. `requiredCredentialNames` has already refused
+    // any variable a model routes through, so a gap here can only be an unused
+    // endpoint; registering it with an empty key would abort startup for a
+    // configuration the service legitimately accepted.
+    const endpoints = config.connections
+      .filter(connection => runtimeEnv[connection.apiKeyEnv])
+      .map(connection => ({ id: connection.id, baseURL: connection.baseURL,
+        apiKey: runtimeEnv[connection.apiKeyEnv],
+        ...(connection.protocols ? { protocols: connection.protocols } : {}) }));
+    backend = new OpenAIBackend({ ...legacyEndpoint(config, runtimeEnv), connections: endpoints, models: config.models });
     gateway = new KimiWorkGateway({ backend, instructionsFile: flags.instructions, recordRequests: panelEnabled });
     if (config.subagents?.transport === 'native-config') gateway.beforeRequest = () => ({ status: 503, code: 'subagent_policy_initializing' });
   } catch (failure) {
@@ -317,9 +343,29 @@ async function serveCommand(argv, env, io, overrides = {}) {
     }
     if (panelEnabled) {
       try {
+        // A read-only view of the background service, so the page can tell a
+        // service-run panel from a terminal one and name the actual restart
+        // commands. Constructing the service executes nothing: launchd and
+        // schtasks are only reached by the install/start/stop commands.
+        const serviceView = new (overrides.GatewayService || GatewayService)({
+          stateDir, env: runtimeEnv,
+          ...(flags.config ? { configPath: path.resolve(flags.config) } : {}),
+          ...(flags.credentials ? { credentialsFile: path.resolve(flags.credentials) } : {}),
+          ...(flags['entry-file'] ? { entryFile: path.resolve(flags['entry-file']) } : {}),
+          ...(kimiDir ? { kimiDir } : {}),
+          panelPort: uiPort,
+          ...(overrides.nodePath ? { nodePath: overrides.nodePath } : {}),
+          ...(overrides.serviceRunner ? { runner: overrides.serviceRunner } : {}),
+          ...(overrides.home ? { home: overrides.home } : {}),
+          ...(overrides.serviceVersion ? { version: overrides.serviceVersion } : {}) });
         controller = new (overrides.PanelController || PanelController)({
           configFile: flags.config, config, gateway, backend, stateDir, kimiDir, policy, env: runtimeEnv,
-          nativeConnection,
+          nativeConnection, ...(flags.credentials ? { credentialsFile: flags.credentials } : {}),
+          service: serviceView,
+          // One manager instance for the whole process: the kernel client is
+          // shared by every request and closed exactly once, at shutdown.
+          ...('contextPolicy' in overrides ? { contextPolicy: overrides.contextPolicy } : {}),
+          ...('mcpManager' in overrides ? { mcpManager: overrides.mcpManager } : {}),
           onPolicy: value => {
             const current = readStateFile(statusFile)?.value;
             if (current?.instanceId !== instanceId) return;
@@ -329,6 +375,11 @@ async function serveCommand(argv, env, io, overrides = {}) {
         });
         panel = new (overrides.GatewayPanel || GatewayPanel)({ controller });
         await panel.start({ port: uiPort });
+        // The MCP card fills before the page polls it, and the saved context
+        // policy is re-asserted whenever the desktop rewrites `config.toml`
+        // again. Both are best effort: a missing Kimi must not fail the run.
+        void controller.loadNativeState();
+        if (!('contextPolicy' in overrides) || overrides.contextPolicy) controller.startContextWatch?.();
       } catch (failure) {
         io.err('kimi-work-gateway: cannot start panel (' + (failure?.message || String(failure)) + ')');
         return 3;
@@ -395,6 +446,11 @@ async function serveCommand(argv, env, io, overrides = {}) {
       ['native integration', () => bounded(() => gateway.workBinding?.close(), 3000)],
       ['dns', () => dns?.stop()], ['gateway', () => gateway.stop()]]) {
       try { await stop(); } catch { io.err('kimi-work-gateway: cannot stop ' + name); }
+    }
+    // If the controller never came up, a manager supplied by an embedder is
+    // still this process's to release; closing twice is idempotent.
+    if (!controller && typeof overrides.mcpManager?.close === 'function') {
+      try { await bounded(() => overrides.mcpManager.close(), 3000); } catch {}
     }
     if (published && readStateFile(statusFile)?.value?.instanceId === instanceId) fs.rmSync(statusFile, { force: true });
     if (entryPublished && flags['entry-file']) removePanelEntry(flags['entry-file']);
@@ -539,7 +595,14 @@ function compatCommand(argv, env, io, overrides) {
   if (flags.config) {
     try {
       const config = readConfig(JSON.parse(fs.readFileSync(flags.config, 'utf8')));
-      models = new OpenAIBackend({ ...config.upstream, apiKey: 'offline-compat-probe', models: config.models }).models;
+      // A syntax check has no credentials; a placeholder keeps the endpoint
+      // list constructible without ever reading a real key.
+      const placeholder = 'offline-compat-probe';
+      models = new OpenAIBackend({
+        ...(config.upstream ? { baseURL: config.upstream.baseURL, apiKey: placeholder } : {}),
+        connections: config.connections.map(connection => ({ id: connection.id, baseURL: connection.baseURL, apiKey: placeholder })),
+        models: config.models,
+      }).models;
     } catch (failure) {
       io.err('kimi-work-gateway: invalid config (' + (failure instanceof SyntaxError ? 'not valid JSON' : failure.code || failure.message) + ')');
       return 2;

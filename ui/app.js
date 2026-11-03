@@ -2,9 +2,15 @@ const API = {
   state: '/api/state',
   models: '/api/models',
   connection: '/api/connection',
+  connections: '/api/connections',
   subagents: '/api/subagents',
   translation: '/api/translation',
   actions: '/api/actions',
+  providers: '/api/providers',
+  modelSearch: '/api/model-search',
+  discovery: '/api/discovery',
+  context: '/api/context',
+  tools: '/api/tools',
 };
 
 const POLL_MS = 2000;
@@ -14,17 +20,67 @@ const VIEW_STORE = 'kwg.panel.view';
 const MODEL_ALIAS_PREFIXES = ['byok-kth-kimi/', 'byok-kth-resp/'];
 const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const ENV_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+const CONNECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const MCP_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost', '::1']);
 const UPDATE_ACTIONS = new Set(['check-update', 'install-update', 'rollback-update']);
 const UPDATE_RELEASE_PREFIX = 'https://github.com/wssz527/kimi-work-gateway/releases/tag/';
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
+/* 上下文预算预设：256K/350K/600K 是固定 token 数，"完整"取已知真实上限。
+   任何预设都不得把套餐上限抬高，因此上限未知时只作手填起点并明确标注。 */
+const BUDGET_PRESETS = [
+  { id: '256k', label: '256K', tokens: 262144 },
+  { id: '350k', label: '350K', tokens: 350000 },
+  { id: '600k', label: '600K', tokens: 600000 },
+  { id: 'full', label: '完整', tokens: null },
+];
+
+const CTX_STATUS = {
+  inherit: { tone: 'neutral', word: '原生默认', note: '没有写入整理阈值，Kimi 按自己的默认策略整理上下文。' },
+  applied: { tone: 'ok', word: '已写入原生配置', note: '配置已写入；正在运行的会话不会中途改变，需新会话读取后生效。' },
+  'waiting-config': { tone: 'warn', word: '待写入', note: '策略已保存，但原生配置文件尚未确认写入。' },
+  conflict: { tone: 'bad', word: '冲突', note: '原生配置中已有其他来源的设置，未覆盖；请检查后重试。' },
+};
+
+const MCP_REASON = {
+  native_mcp_kernel_unavailable: '没有找到官方 Kimi 内核，无法读取原生 MCP。',
+  native_mcp_kimi_dir_unavailable: 'Kimi 用户目录不可读。',
+  native_mcp_kernel_incompatible: '当前 Kimi 内核版本不提供 MCP 管理接口。',
+  native_mcp_timeout: '读取原生 MCP 超时。',
+  native_mcp_operation_failed: '原生 MCP 操作未完成。',
+  native_mcp_manager_closed: 'MCP 管理器已关闭，请重新加载面板。',
+  native_mcp_test_failed: '服务器没有按 MCP 协议正常回应。',
+  native_mcp_test_timeout: '测试超时，结果未知。',
+  native_mcp_test_in_progress: '上一次测试尚未结束。',
+  native_mcp_server_not_found: 'Kimi 原生配置中没有这个服务器。',
+  native_mcp_invalid_input: '提交的服务器设置不被接受。',
+  native_mcp_server_exists: '同名服务器已存在。',
+};
+
+const DISCOVERY_REASON = {
+  discovery_unavailable: '无法连接该上游，请检查地址与网络。',
+  discovery_timeout: '读取上游目录超时。',
+  discovery_http_error: '上游 /models 返回了错误状态。',
+  discovery_too_large: '上游目录超出允许大小，已中止。',
+  discovery_invalid_catalog: '上游返回的目录格式不被接受。',
+  connection_unavailable: '该连接已不在配置中。',
+  discovery_busy: '上一次读取仍在进行，请稍候。',
+};
+
+/* check-upstream 失败原因与 discovery 共用同一族错误码；这里补齐它自己的
+   连接级拒绝，避免把「连接不在当前配置」显示成原始代码。 */
+const UPSTREAM_REASON = {
+  ...DISCOVERY_REASON,
+  connection_unavailable: '该连接不在当前已配置的连接中；检查按行进行，不会隐式挑选。',
+};
+
 const VIEW_COPY = {
-  overview: { title: '概览', lede: '网关、配置与子代理目标此刻的真实状态。' },
-  models: { title: '模型管理', lede: '目录决定可选模型与它们的真实能力；保存会提交整个目录。' },
+  overview: { title: '概览', lede: '路由、连接、上下文与实测流量的真实状态。' },
+  models: { title: '模型管理', lede: '每个模型对应一条本机路由与一个真实上游 ID；保存会提交整个目录。' },
   subagents: { title: '子代理', lede: '选择本机子代理实际使用的模型与思考档位。' },
   translation: { title: '思考翻译', lede: '把 Kimi 的思考过程翻译成所选语言；保存只写配置，注入成功以运行时为准。' },
-  connection: { title: '连接与诊断', lede: '上游地址、端口与环境变量名；检查只诊断连通性，不代表推理成功。' },
+  connection: { title: '连接与工具', lede: '上游连接、原生上下文阈值与 MCP 工具管理。' },
 };
 
 const ACTION_LABEL = {
@@ -279,6 +335,17 @@ const dom = {
   factConfig: $('fact-config'),
   factConfigFile: $('fact-config-file'),
 
+  factConnections: $('fact-connections'),
+  factConnectionsSub: $('fact-connections-sub'),
+  factRoute: $('fact-route'),
+  factRouteSub: $('fact-route-sub'),
+  factContextDot: $('fact-context-dot'),
+  factContext: $('fact-context'),
+  factContextSub: $('fact-context-sub'),
+  factToolsDot: $('fact-tools-dot'),
+  factTools: $('fact-tools'),
+  factToolsSub: $('fact-tools-sub'),
+
   savedValue: $('saved-value'),
   savedSub: $('saved-sub'),
   adoptedValue: $('adopted-value'),
@@ -316,8 +383,18 @@ const dom = {
   modelForm: $('model-form'),
   mId: $('m-id'),
   mIdHint: $('m-id-hint'),
+  mUpstream: $('m-upstream'),
+  mUpstreamHint: $('m-upstream-hint'),
+  mConnection: $('m-connection'),
+  mConnectionHint: $('m-connection-hint'),
+  mCandidates: $('m-candidates'),
+  mSourceField: $('m-source-field'),
+  mProtocolHint: $('m-protocol-hint'),
+  mContextHint: $('m-context-hint'),
+  mBudgetGroup: $('m-budget-group'),
   mName: $('m-name'),
   mProtocol: $('m-protocol'),
+  mProtocolGroup: $('m-protocol-group'),
   mContext: $('m-context'),
   mOutput: $('m-output'),
   mTools: $('m-tools'),
@@ -390,10 +467,101 @@ const dom = {
   connSave: $('conn-save'),
   restartState: $('restart-state'),
   restartFile: $('restart-file'),
+  restartHead: $('restart-head'),
+  restartService: $('restart-service'),
+  restartForeground: $('restart-foreground'),
+  restartServiceRestart: $('restart-service-restart'),
+  restartServiceStatus: $('restart-service-status'),
+  restartServiceConfig: $('restart-service-config'),
 
-  diagUpstreamDot: $('diag-upstream-dot'),
-  diagUpstreamState: $('diag-upstream-state'),
-  diagUpstreamMeta: $('diag-upstream-meta'),
+  connsUnavailable: $('conns-unavailable'),
+  connsList: $('conns-list'),
+  connsEmpty: $('conns-empty'),
+  connsDiff: $('conns-diff'),
+  connsErrors: $('conns-errors'),
+  connsDraft: $('conns-draft'),
+  connsAdd: $('conns-add'),
+  connsReset: $('conns-reset'),
+  connsSave: $('conns-save'),
+  connEditor: $('conn-editor'),
+  connEditorTitle: $('conn-editor-title'),
+  connEditorClose: $('conn-editor-close'),
+  connEditorCancel: $('conn-editor-cancel'),
+  connEditorApply: $('conn-editor-apply'),
+  connEditorTest: $('conn-editor-test'),
+  ceName: $('ce-name'),
+  ceId: $('ce-id'),
+  cePreset: $('ce-preset'),
+  cePresetHint: $('ce-preset-hint'),
+  ceBase: $('ce-base'),
+  ceKey: $('ce-key'),
+  ceKeyHint: $('ce-key-hint'),
+  ceKeyEnv: $('ce-keyenv'),
+  ceChat: $('ce-chat'),
+  ceResponses: $('ce-responses'),
+  legacyPanel: $('legacy-panel'),
+
+  ctxUnavailable: $('ctx-unavailable'),
+  ctxModes: $('ctx-modes'),
+  ctxModeInherit: $('ctx-mode-inherit'),
+  ctxModeCustom: $('ctx-mode-custom'),
+  ctxFields: $('ctx-fields'),
+  ctxRatio: $('ctx-ratio'),
+  ctxRatioHint: $('ctx-ratio-hint'),
+  ctxReserved: $('ctx-reserved'),
+  ctxReservedHint: $('ctx-reserved-hint'),
+  ctxSaved: $('ctx-saved'),
+  ctxSavedSub: $('ctx-saved-sub'),
+  ctxObserved: $('ctx-observed'),
+  ctxObservedSub: $('ctx-observed-sub'),
+  ctxVerdict: $('ctx-verdict'),
+  ctxVerdictDot: $('ctx-verdict-dot'),
+  ctxVerdictWord: $('ctx-verdict-word'),
+  ctxVerdictNote: $('ctx-verdict-note'),
+  ctxErrors: $('ctx-errors'),
+  ctxDraft: $('ctx-draft'),
+  ctxReset: $('ctx-reset'),
+  ctxSave: $('ctx-save'),
+  ctxNote: $('ctx-note'),
+
+  picker: $('picker'),
+  pickerTitle: $('picker-title'),
+  pickerLede: $('picker-lede'),
+  pickerClose: $('picker-close'),
+  pickerQ: $('picker-q'),
+  pickerScan: $('picker-scan'),
+  pickerState: $('picker-state'),
+  pickerNote: $('picker-note'),
+  pickerList: $('picker-list'),
+  pickerEmpty: $('picker-empty'),
+  pickerEmptyTitle: $('picker-empty-title'),
+  pickerEmptyNote: $('picker-empty-note'),
+
+  toolsUnavailable: $('tools-unavailable'),
+  toolsList: $('tools-list'),
+  toolsEmpty: $('tools-empty'),
+  toolsEditor: $('tools-editor'),
+  toolsEditorTitle: $('tools-editor-title'),
+  toolsEditorClose: $('tools-editor-close'),
+  toolsAdd: $('tools-add'),
+  toolsRefresh: $('tools-refresh'),
+  toolsErrors: $('tools-errors'),
+  toolsResult: $('tools-result'),
+  teName: $('te-name'),
+  teNameHint: $('te-name-hint'),
+  teTransport: $('te-transport'),
+  teStdio: $('te-stdio'),
+  teRemote: $('te-remote'),
+  teCommand: $('te-command'),
+  teArgs: $('te-args'),
+  teEnv: $('te-env'),
+  teUrl: $('te-url'),
+  teHeaders: $('te-headers'),
+  teEnabled: $('te-enabled'),
+  teErrors: $('te-errors'),
+  teSave: $('te-save'),
+  teCancel: $('te-cancel'),
+
   diagCompatDot: $('diag-compat-dot'),
   diagCompatState: $('diag-compat-state'),
   diagCompatMeta: $('diag-compat-meta'),
@@ -465,9 +633,18 @@ const state = {
   editor: null,
   deleteId: null,
   conn: { base: null, dirty: false },
+  conns: { base: null, dirty: false, editing: null, draft: null, errors: [] },
+  connChecks: {},
+  context: { base: null, dirty: false },
+  tools: { servers: null, available: false, reason: null, editing: false, result: null, busy: false },
+  picker: { open: false, models: null, query: '', state: null, checkedAt: null, source: null, reason: null,
+    busy: false, seq: 0, hint: null, scope: null },
+  providers: null,
   modelsSaving: false,
   subagentSaving: false,
   connSaving: false,
+  connsSaving: false,
+  contextSaving: false,
   translation: { base: null, dirty: false },
   translationSaving: false,
   reachable: null,
@@ -639,6 +816,26 @@ function setHidden(el, hidden) {
   if (el) el.hidden = Boolean(hidden);
 }
 
+/* 错误列表是界面里唯一展示后端拒绝原因的位置；空列表即隐藏，
+   避免留下上一次的过期错误被误读成当前状态。 */
+function renderErrorList(el, messages) {
+  if (!el) return;
+  const list = (messages || []).filter((message) => typeof message === 'string' && message);
+  setHidden(el, list.length === 0);
+  el.replaceChildren(...list.map((message) => {
+    const p = document.createElement('p');
+    p.textContent = message;
+    return p;
+  }));
+}
+
+/* 连接区的提示必须活过轮询重渲染：把它存进会话状态再画，
+   只画不存会导致下一次 state 刷新把用户的错误提示悄悄抹掉。 */
+function setConnErrors(messages) {
+  state.conns.errors = (messages || []).filter((message) => typeof message === 'string' && message);
+  renderErrorList(dom.connsErrors, state.conns.errors);
+}
+
 function fmtCount(n) {
   if (typeof n !== 'number' || !Number.isFinite(n)) return '—';
   return n.toLocaleString('zh-CN');
@@ -648,6 +845,19 @@ function fmtK(n) {
   if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return '—';
   if (n >= 1000) return (n / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 1 }) + 'K';
   return String(n);
+}
+
+/* token 预算按真实数值展示；不四舍五入到「看起来像整 K」的数，
+   避免把一个手填的 262000 显示成 262K 而掩盖实际值。 */
+function fmtTokens(n) {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return '未知';
+  return n.toLocaleString('zh-CN') + ' tokens';
+}
+
+function fmtMs(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '—';
+  if (ms < 1000) return Math.round(ms) + ' ms';
+  return (ms / 1000).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + ' s';
 }
 
 function fmtTime(value) {
@@ -776,6 +986,18 @@ function buildModel(input) {
   const contextWindow = Number(input.context);
   if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0) errors.push('上下文窗口必须是正整数。');
 
+  /* contextLimit 是已知的真实上游上限，只作校验用；预算超过它时明确拒绝，
+     而不是把套餐限制悄悄抬高。上限未知时不做任何推断。 */
+  const limitText = String(input.contextLimit === undefined || input.contextLimit === null ? '' : input.contextLimit).trim();
+  let contextLimit;
+  if (limitText) {
+    contextLimit = Number(limitText);
+    if (!Number.isSafeInteger(contextLimit) || contextLimit <= 0) errors.push('已知上下文上限必须是正整数，或留空表示未知。');
+    else if (Number.isSafeInteger(contextWindow) && contextWindow > contextLimit) {
+      errors.push('上下文预算 ' + fmtTokens(contextWindow) + ' 超过已知上限 ' + fmtTokens(contextLimit) + '，不能保存。');
+    }
+  }
+
   const outputText = String(input.output || '').trim();
   let maxOutputTokens;
   if (outputText) {
@@ -798,6 +1020,14 @@ function buildModel(input) {
     }
   }
 
+  const connectionId = String(input.connectionId || '').trim();
+  if (connectionId && !CONNECTION_ID_PATTERN.test(connectionId)) errors.push('连接标识格式无效，请重新选择连接。');
+  const upstreamModelId = String(input.upstreamModelId || '').trim();
+  if (upstreamModelId && /[\u0000-\u001f]/.test(upstreamModelId)) errors.push('上游模型 ID 不能包含控制字符。');
+  if (upstreamModelId.length > 2048) errors.push('上游模型 ID 过长。');
+
+  const metadata = metadataSourceOf(input.metadataSource);
+
   const model = {
     id,
     ...(String(input.name || '').trim() ? { name: String(input.name).trim() } : {}),
@@ -809,8 +1039,47 @@ function buildModel(input) {
     inputModalities: input.vision === true ? ['text', 'image'] : ['text'],
     ...(reasoning && parsed.list.length ? { reasoningEfforts: parsed.list } : {}),
     ...(defaultEffort ? { defaultEffort } : {}),
+    ...(connectionId ? { connectionId } : {}),
+    ...(upstreamModelId ? { upstreamModelId } : {}),
+    ...(contextLimit ? { contextLimit } : {}),
+    ...(metadata ? { metadataSource: metadata } : {}),
   };
   return { model, errors };
+}
+
+/* 元数据来源只保留契约里的三种，且只在带 url/checkedAt 时才带这些字段：
+   来源不可考时宁可不写，也不伪造一个 checkedAt。 */
+function metadataSourceOf(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!['preset', 'discovery', 'manual'].includes(value.kind)) return null;
+  const source = { kind: value.kind };
+  if (typeof value.url === 'string' && /^https?:\/\//.test(value.url)) source.url = value.url;
+  if (typeof value.checkedAt === 'string' && value.checkedAt) source.checkedAt = value.checkedAt;
+  return source;
+}
+
+/* `metadataSource` 只描述 contextWindow 这一个字段的真实出处：保存预算时原样
+   沿用，所以既不能默认写 discovery，也不能拿别的字段的来源顶替。判定顺序：
+   后端合并后的 metadataSource（专指上下文来源）→ 合并前的 sources（只有一方
+   贡献过才能归因）→ 候选自己的 parser 来源 → manual。 */
+function candidateMetadataSource(model) {
+  if (!model || typeof model !== 'object') return { kind: 'manual' };
+  const stated = metadataSourceOf(model.metadataSource);
+  if (stated) return stated;
+  const sources = model.sources && typeof model.sources === 'object' ? model.sources : null;
+  if (sources) {
+    const sides = ['discovery', 'preset'].map((key) => metadataSourceOf(sources[key])).filter(Boolean);
+    /* 两方都贡献过字段时无法判断预算出自哪边：宁可标 manual，也不猜一个。 */
+    if (sides.length === 1) return sides[0];
+    if (sides.length > 1) return { kind: 'manual' };
+  }
+  /* parser 的 per-model `source` 只有 url/checkedAt，没有 kind：它来自上游目录
+     读取，且只有这条候选确实读到了 contextWindow 才谈得上预算来源。 */
+  if (model.source && typeof model.source === 'object' && Number(model.contextWindow) > 0) {
+    const own = metadataSourceOf({ ...model.source, kind: 'discovery' });
+    if (own) return own;
+  }
+  return { kind: 'manual' };
 }
 
 function catalogueWith(editor, models) {
@@ -821,6 +1090,58 @@ function catalogueWith(editor, models) {
   else list.push(built);
   return list;
 }
+
+/* ---------- routing helpers ---------- */
+
+/* 建议的本机路由 ID：连接 + 协议前缀 + 上游 ID 的百分号编码。
+   末段决定协议，因此前缀同时是这份契约的自解释形式；用户仍可手改。 */
+function routeIdFor(connectionId, upstreamModelId, protocol) {
+  const connection = String(connectionId || '').trim();
+  const upstream = String(upstreamModelId || '').trim();
+  if (!connection || !upstream) return '';
+  const family = protocol || modelFamilyFor(upstream) || 'responses';
+  const prefix = family === 'chat' ? 'kimi-' : 'resp-';
+  return connection + '/' + prefix + encodeURIComponent(upstream);
+}
+
+function connectionRowsOf(data) {
+  const connections = data && data.connections;
+  if (!connections) return null;
+  const rows = Array.isArray(connections.saved) ? connections.saved : Array.isArray(connections.active) ? connections.active : [];
+  return rows.filter((row) => row && typeof row === 'object');
+}
+
+function connectionsAvailable(data) {
+  return Array.isArray(connectionRowsOf(data));
+}
+
+function findConnection(data, id) {
+  const rows = connectionRowsOf(data) || [];
+  return rows.find((row) => row && row.id === id) || null;
+}
+
+function connectionLabel(row) {
+  if (!row) return '—';
+  if (row.legacy) return '旧版单上游';
+  return row.name || row.id || '—';
+}
+
+function connectionsChanged(data) {
+  return Boolean(data && data.connections && data.connections.restartRequired);
+}
+
+/* 路由与上游 ID 都按原样展示：任何大小写或分隔符改写都会让请求打到不存在的模型。 */
+function routingOf(model) {
+  if (!model) return { connection: null, connectionId: null, upstream: null, legacy: true };
+  const connectionId = typeof model.connectionId === 'string' && model.connectionId ? model.connectionId : null;
+  return {
+    connectionId,
+    connection: connectionId,
+    upstream: typeof model.upstreamModelId === 'string' && model.upstreamModelId ? model.upstreamModelId : model.id,
+    legacy: !connectionId,
+  };
+}
+
 
 /* ---------- connection helpers ---------- */
 
@@ -914,6 +1235,372 @@ function fillConnectionForm() {
   state.conn.base = connectionKey(values);
   state.conn.dirty = false;
 }
+
+/* ---------- named connections ---------- */
+
+/* 草稿只保存可回传的字段。apiKey 只在用户本次输入时存在，且不会回填到任何
+   输入框；签名比较同样排除它，避免把「刚输入但未保存的 key」当成未变更。 */
+function connectionDraftRow(row) {
+  return {
+    id: typeof row.id === 'string' ? row.id : '',
+    name: typeof row.name === 'string' ? row.name : '',
+    providerPresetId: typeof row.providerPresetId === 'string' ? row.providerPresetId : '',
+    baseURL: typeof row.baseURL === 'string' ? row.baseURL : '',
+    apiKeyEnv: typeof row.apiKeyEnv === 'string' ? row.apiKeyEnv : '',
+    protocols: Array.isArray(row.protocols) ? row.protocols.filter((value) => value === 'chat' || value === 'responses') : null,
+    legacy: row.legacy === true,
+    modelCount: Number.isInteger(row.modelCount) ? row.modelCount : null,
+    apiKeySet: row.apiKeySet === true,
+    apiKey: '',
+    secretSet: false,
+  };
+}
+
+function connectionDraftFrom(data) {
+  const rows = connectionRowsOf(data);
+  if (!rows) return null;
+  return rows.map(connectionDraftRow);
+}
+
+function connectionsSignature(rows) {
+  if (!Array.isArray(rows)) return '';
+  return JSON.stringify(rows.map((row) => [row.legacy ? 'legacy' : 'named', row.id, row.name,
+    row.providerPresetId || '', row.baseURL, row.apiKeyEnv || '',
+    (row.protocols || []).slice().sort().join(','), row.apiKey ? 'with-key' : '']));
+}
+
+function savedConnectionsSignature(data) {
+  return connectionsSignature(connectionDraftFrom(data));
+}
+
+function connectionsDirty() {
+  return connectionsSignature(state.conns.draft || []) !== state.conns.base;
+}
+
+/* 提交体只包含契约允许的字段；apiKey 仅在本次输入过时带上，
+   省略即表示保留已保存的旧值。 */
+function connectionPayload(rows) {
+  return (rows || []).filter((row) => !row.legacy).map((row) => ({
+    id: row.id,
+    name: row.name,
+    ...(row.providerPresetId ? { providerPresetId: row.providerPresetId } : {}),
+    baseURL: row.baseURL,
+    ...(row.apiKeyEnv ? { apiKeyEnv: row.apiKeyEnv } : {}),
+    ...(Array.isArray(row.protocols) && row.protocols.length ? { protocols: row.protocols } : {}),
+    ...(row.apiKey ? { apiKey: row.apiKey } : {}),
+  }));
+}
+
+const CONNECTION_ID_HINT = '标识只能使用字母、数字、点、下划线与连字符，且以字母或数字开头。';
+
+/* 编辑抽屉的本地校验与服务端白名单保持一致，并额外拦下三种会静默丢配置的情况：
+   重复标识、重复环境变量名、以及新连接缺 Key。 */
+function validateConnectionDraft(draft, rows, { originalId = null } = {}) {
+  const errors = [];
+  const id = String(draft.id || '').trim();
+  const name = String(draft.name || '').trim();
+  if (!name) errors.push('请填写显示名称。');
+  else if (name.length > 128) errors.push('显示名称最长 128 字符。');
+  if (!id) errors.push('请填写连接标识。');
+  else if (!CONNECTION_ID_PATTERN.test(id)) errors.push(CONNECTION_ID_HINT);
+  else if ((rows || []).some((row) => !row.legacy && row.id === id && row.id !== originalId)) errors.push('已有同名标识的连接。');
+
+  const base = normalizeBaseURL(draft.baseURL);
+  if (base.error) errors.push(base.error);
+
+  const keyEnv = String(draft.apiKeyEnv || '').trim();
+  if (keyEnv && !/^[A-Z_][A-Z0-9_]{0,127}$/.test(keyEnv)) errors.push('Key 变量名只能使用大写字母、数字与下划线，且不能以数字开头。');
+  if (keyEnv && (rows || []).some((row) => !row.legacy && row.id !== originalId && row.apiKeyEnv === keyEnv)) {
+    errors.push('另一条连接已使用同一个 Key 变量名。');
+  }
+
+  const apiKey = String(draft.apiKey || '');
+  if (!apiKey.trim() && !draft.secretSet && !(originalId && (rows || []).some((row) => row.id === originalId && row.apiKeySet))) {
+    errors.push('请填写 API Key。留空只用于保持已保存的 Key。');
+  }
+  if (apiKey && /[\u0000-\u001f]/.test(apiKey)) errors.push('API Key 不能包含换行或控制字符。');
+
+  const protocols = Array.isArray(draft.protocols) ? draft.protocols.filter((value) => value === 'chat' || value === 'responses') : [];
+  return {
+    errors,
+    value: {
+      id,
+      name,
+      ...(draft.providerPresetId ? { providerPresetId: draft.providerPresetId } : {}),
+      baseURL: base.value || String(draft.baseURL || '').trim(),
+      apiKeyEnv: keyEnv,
+      ...(protocols.length ? { protocols } : {}),
+      apiKey: apiKey.trim(),
+      legacy: false,
+    },
+  };
+}
+
+/* 每次打开抽屉都从草稿副本开始，取消不会留下半个编辑。 */
+function openConnectionEditor(row) {
+  const rows = state.conns.draft || [];
+  state.conns.editing = {
+    originalId: row && !row.legacy ? row.id : null,
+    draft: row ? { ...connectionDraftRow(row), apiKey: '', secretSet: row.apiKeySet === true }
+      : { id: '', name: '', providerPresetId: '', baseURL: '', apiKeyEnv: '', protocols: null,
+        legacy: false, modelCount: null, apiKeySet: false, apiKey: '', secretSet: false },
+    errors: [],
+  };
+  renderConnections();
+  if (dom.ceName && dom.ceName.focus) dom.ceName.focus();
+}
+
+function closeConnectionEditor() {
+  state.conns.editing = null;
+  renderConnections();
+}
+
+function readConnectionEditor() {
+  const editing = state.conns.editing;
+  if (!editing) return;
+  editing.draft.name = dom.ceName ? dom.ceName.value : editing.draft.name;
+  if (editing.originalId === null && dom.ceId) editing.draft.id = dom.ceId.value;
+  editing.draft.providerPresetId = dom.cePreset ? dom.cePreset.value : editing.draft.providerPresetId;
+  editing.draft.baseURL = dom.ceBase ? dom.ceBase.value : editing.draft.baseURL;
+  editing.draft.apiKey = dom.ceKey ? dom.ceKey.value : editing.draft.apiKey;
+  editing.draft.apiKeyEnv = dom.ceKeyEnv ? dom.ceKeyEnv.value : editing.draft.apiKeyEnv;
+  const protocols = [];
+  if (dom.ceChat && dom.ceChat.checked) protocols.push('chat');
+  if (dom.ceResponses && dom.ceResponses.checked) protocols.push('responses');
+  editing.draft.protocols = protocols.length ? protocols : null;
+  if (editing.draft.apiKey) editing.draft.secretSet = true;
+}
+
+function applyConnectionEditor() {
+  const editing = state.conns.editing;
+  if (!editing) return;
+  readConnectionEditor();
+  const rows = state.conns.draft || [];
+  const { errors, value } = validateConnectionDraft(editing.draft, rows, { originalId: editing.originalId });
+  editing.errors = errors;
+  if (errors.length) {
+    renderConnections();
+    return;
+  }
+  const next = rows.slice();
+  const index = editing.originalId ? next.findIndex((row) => !row.legacy && row.id === editing.originalId) : -1;
+  const stored = {
+    ...value,
+    modelCount: index >= 0 ? next[index].modelCount : 0,
+    apiKeySet: index >= 0 ? next[index].apiKeySet : false,
+    secretSet: Boolean(value.apiKey) || (index >= 0 && next[index].secretSet),
+  };
+  if (index >= 0) next[index] = stored;
+  else next.push(stored);
+  state.conns.draft = next;
+  state.conns.editing = null;
+  renderConnections();
+  renderConnectionsDiff();
+}
+
+/* 供应商预设只用来填地址与协议；字段可继续手改，不把预设当成不可推翻的事实。 */
+function applyProviderPreset(presetId) {
+  const editing = state.conns.editing;
+  if (!editing || !presetId) return;
+  const preset = providerPreset(presetId);
+  if (!preset) return;
+  editing.draft.providerPresetId = preset.id;
+  editing.draft.baseURL = typeof preset.baseURL === 'string' ? preset.baseURL : editing.draft.baseURL;
+  if (Array.isArray(preset.protocols) && preset.protocols.length) {
+    editing.draft.protocols = preset.protocols.filter((value) => value === 'chat' || value === 'responses');
+  }
+  if (!editing.draft.name) editing.draft.name = preset.name || '';
+  if (!editing.draft.id) editing.draft.id = presetsSuggestedId(preset);
+  if (dom.ceBase) dom.ceBase.value = editing.draft.baseURL;
+  if (dom.ceChat) dom.ceChat.checked = (editing.draft.protocols || []).includes('chat');
+  if (dom.ceResponses) dom.ceResponses.checked = (editing.draft.protocols || []).includes('responses');
+  if (dom.ceId && editing.originalId === null) dom.ceId.value = editing.draft.id;
+  if (dom.ceName) dom.ceName.value = editing.draft.name;
+  renderConnections();
+}
+
+function presetsSuggestedId(preset) {
+  const base = String(preset.id || 'conn').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
+  let id = base || 'conn';
+  if (!/^[A-Za-z0-9]/.test(id)) id = 'c-' + id;
+  return id.slice(0, 64);
+}
+
+function providerPresets() {
+  return state.providers && Array.isArray(state.providers.presets) ? state.providers.presets : [];
+}
+
+function providerPreset(id) {
+  if (!id) return null;
+  return providerPresets().find((preset) => preset && preset.id === id) || null;
+}
+
+/* ---------- native context policy ---------- */
+
+const CTX_RATIO_MIN = 0.5;
+const CTX_RATIO_MAX = 0.99;
+
+function contextPolicyOf(data) {
+  const context = data && data.context;
+  return context && typeof context === 'object' && context.policy ? context : null;
+}
+
+function contextAvailable(data) {
+  return contextPolicyOf(data) !== null;
+}
+
+/* 契约只接受 0.50–0.99 的小数。越界或缺失时返回 null，由界面显示「待确认」，
+   绝不把 >1 的百分数静默换算成小数而掩盖后端契约问题。 */
+function normalizedRatio(value) {
+  const number = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(number)) return null;
+  if (number < CTX_RATIO_MIN || number > CTX_RATIO_MAX) return null;
+  return number;
+}
+
+function ratioToPercent(value) {
+  const ratio = normalizedRatio(value);
+  return ratio === null ? null : Math.round(ratio * 1000) / 10;
+}
+
+function percentToRatio(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  const ratio = Math.round(number * 10) / 1000;
+  return ratio < CTX_RATIO_MIN || ratio > CTX_RATIO_MAX ? null : ratio;
+}
+
+function contextDraftFrom(data) {
+  const context = contextPolicyOf(data);
+  if (!context) return null;
+  const policy = context.policy || {};
+  const custom = policy.mode === 'custom';
+  return {
+    mode: custom ? 'custom' : 'inherit',
+    ratio: custom && normalizedRatio(policy.triggerRatio) !== null ? String(ratioToPercent(policy.triggerRatio)) : '',
+    reserved: custom && Number.isSafeInteger(policy.reservedTokens) && policy.reservedTokens >= 0 ? String(policy.reservedTokens) : '0',
+  };
+}
+
+function contextSignature(draft) {
+  return draft ? JSON.stringify([draft.mode, draft.ratio, draft.reserved]) : '';
+}
+
+function contextDirty() {
+  return contextSignature(state.context.draft) !== state.context.base;
+}
+
+function validateContextDraft(draft) {
+  const errors = [];
+  if (!draft) return { errors, value: null };
+  if (draft.mode === 'inherit') return { errors, value: { mode: 'inherit' } };
+  const ratio = percentToRatio(draft.ratio);
+  if (ratio === null) errors.push('触发阈值必须是 50–99 之间的百分比。');
+  const reservedText = String(draft.reserved === '' ? '0' : draft.reserved === undefined ? '0' : draft.reserved).trim();
+  const reserved = Number(reservedText);
+  if (!Number.isSafeInteger(reserved) || reserved < 0) errors.push('预留预算必须是不小于 0 的整数 tokens。');
+  return { errors, value: errors.length ? null : { mode: 'custom', triggerRatio: ratio, reservedTokens: reserved } };
+}
+
+function evaluateContext(data) {
+  const context = contextPolicyOf(data);
+  if (!context) {
+    return { tone: 'neutral', word: '不可用', note: '面板服务没有提供上下文策略状态；模型与连接不受影响。', status: null };
+  }
+  const status = typeof context.status === 'string' ? context.status : 'inherit';
+  const info = CTX_STATUS[status] || { tone: 'neutral', word: status, note: '' };
+  const reason = typeof context.reason === 'string' && context.reason ? context.reason : '';
+  return { ...info, note: reason || info.note, status };
+}
+
+/* ---------- native MCP managers ---------- */
+
+function toolsState(data) {
+  const value = data && data.tools;
+  return value && typeof value === 'object' && Array.isArray(value.servers) ? value : null;
+}
+
+function toolsAvailable(data) {
+  const value = toolsState(data);
+  return Boolean(value && value.available === true);
+}
+
+function mcpReasonText(code) {
+  if (typeof code !== 'string' || !code) return '';
+  return MCP_REASON[code] || code;
+}
+
+/* 已知原因有中文说明；未知错误码也给一句可读的话，不把内部标识直接甩给用户。 */
+function discoveryReasonText(code) {
+  if (typeof code !== 'string' || !code) return '';
+  if (DISCOVERY_REASON[code]) return DISCOVERY_REASON[code];
+  if (code === 'model_search_failed' || code === 'panel_operation_failed') {
+    return '候选搜索未完成，请稍后重试；已载入的供应商目录仍可点选。';
+  }
+  return '操作未完成（' + code + '）；请重试或查看诊断。';
+}
+
+/* update 的 patch 只能包含用户真正改过的字段：省略的秘密字段由后端保留，
+   因此未填写的 env/headers 绝不能被序列化成空对象而把已存值清空。 */
+function mcpServerPayload(draft) {
+  const errors = [];
+  const name = String(draft.name || '');
+  if (!MCP_NAME_PATTERN.test(name)) errors.push('名称需以字母或数字开头，可用点、下划线与连字符，最长 64 字符。');
+  const transport = ['stdio', 'http', 'sse'].includes(draft.transport) ? draft.transport : null;
+  if (!transport) errors.push('请选择传输方式。');
+  const server = { name, transport, enabled: draft.enabled !== false };
+  if (transport === 'stdio') {
+    const command = String(draft.command || '').trim();
+    if (!command) errors.push('stdio 服务器需要填写命令。');
+    if (command.length > 1024) errors.push('命令最长 1024 字符。');
+    server.command = command;
+    const args = (draft.args || []).filter((value) => typeof value === 'string');
+    if (args.length > 64) errors.push('参数最多 64 个。');
+    if (args.length) server.args = args;
+    if (draft.env && Object.keys(draft.env).length) server.env = { ...draft.env };
+  } else if (transport) {
+    const url = String(draft.url || '').trim();
+    let parsed;
+    try { parsed = new URL(url); } catch { errors.push('服务地址不是合法的 URL。'); }
+    if (parsed && !['http:', 'https:'].includes(parsed.protocol)) errors.push('服务地址只接受 http 或 https。');
+    if (parsed && (parsed.username || parsed.password)) errors.push('服务地址不能包含账号或密码。');
+    if (!url) errors.push('远程服务器需要填写服务地址。');
+    server.url = url;
+    if (draft.headers && Object.keys(draft.headers).length) server.headers = { ...draft.headers };
+  }
+  return { errors, server };
+}
+
+function parseLines(text) {
+  return String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+function parseEnvLines(text) {
+  const env = {};
+  const invalid = [];
+  for (const line of parseLines(text)) {
+    const index = line.indexOf('=');
+    if (index <= 0) { invalid.push(line); continue; }
+    const key = line.slice(0, index).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) { invalid.push(line); continue; }
+    env[key] = line.slice(index + 1);
+  }
+  return { env, invalid };
+}
+
+function parseHeaderLines(text) {
+  const headers = {};
+  const invalid = [];
+  for (const line of parseLines(text)) {
+    const index = line.indexOf(':');
+    if (index <= 0) { invalid.push(line); continue; }
+    const key = line.slice(0, index).trim();
+    if (!/^[A-Za-z0-9-]+$/.test(key)) { invalid.push(line); continue; }
+    headers[key] = line.slice(index + 1).trim();
+  }
+  return { headers, invalid };
+}
+
 
 /* ---------- translation helpers ---------- */
 
@@ -1355,6 +2042,68 @@ function renderOverview(data) {
   setText(dom.metricFailures, fmtCount(metrics.failures || 0));
   setText(dom.metricUptime, typeof metrics.startedAt === 'number' ? fmtDuration(Date.now() - metrics.startedAt) : '—');
   renderRecent(Array.isArray(metrics.recent) ? metrics.recent : []);
+  renderRoutingFacts(data);
+}
+
+/* 概览只汇报可从状态中直接读到的路由事实：连接数、当前子代理路由与上游 ID、
+   上下文策略状态、原生工具可用性。任何未知值都写「未知」而不是留空。 */
+function renderRoutingFacts(data) {
+  const rows = connectionRowsOf(data);
+  const modelCount = Array.isArray(data.models) ? data.models.length : 0;
+  if (!rows) {
+    setText(dom.factConnections, '旧版单上游');
+    setText(dom.factConnectionsSub, modelCount + ' 个模型路由到同一个上游');
+  } else {
+    const named = rows.filter((row) => !row.legacy);
+    setText(dom.factConnections, named.length + ' 条连接' + (rows.some((row) => row.legacy) ? ' + 旧版' : ''));
+    const unset = rows.filter((row) => !row.apiKeySet).length;
+    setText(dom.factConnectionsSub, unset ? unset + ' 条连接的 Key 未在运行环境中' : '所有连接的 Key 已就绪');
+  }
+
+  const saved = savedTarget(data);
+  const model = saved.mode !== 'inherit' && saved.model ? findModel(saved.model) : null;
+  if (saved.mode === 'inherit') {
+    setText(dom.factRoute, '跟随主模型');
+    setText(dom.factRouteSub, '子代理不固定上游模型');
+  } else if (saved.mode === 'pool') {
+    setText(dom.factRoute, '模型池 · ' + fmtCount(saved.models.length) + ' 个候选');
+    setText(dom.factRouteSub, '默认 ' + (saved.model || '未选择'));
+  } else if (!saved.model) {
+    setText(dom.factRoute, '未选择');
+    setText(dom.factRouteSub, '尚未保存子代理目标');
+  } else {
+    const routing = routingOf(model);
+    setText(dom.factRoute, routing.upstream || saved.model);
+    setText(dom.factRouteSub, (routing.connectionId ? '连接 ' + routing.connectionId + ' · ' : '旧版单上游 · ')
+      + (model ? protocolLabel(model.protocol) : '协议未知'));
+  }
+
+  const context = evaluateContext(data);
+  setDot(dom.factContextDot, context.tone);
+  setText(dom.factContext, context.word);
+  const policy = contextPolicyOf(data);
+  if (!policy) setText(dom.factContextSub, '面板未提供上下文策略状态');
+  else {
+    const ratio = ratioToPercent(policy.policy && policy.policy.triggerRatio);
+    setText(dom.factContextSub, policy.policy && policy.policy.mode === 'custom'
+      ? (ratio === null ? '触发阈值待确认' : ratio + '% 触发') : '跟随原生默认');
+  }
+
+  const tools = toolsState(data);
+  if (!tools) {
+    setDot(dom.factToolsDot, 'neutral');
+    setText(dom.factTools, '未提供');
+    setText(dom.factToolsSub, '面板服务没有 MCP 接口');
+  } else if (tools.available === false) {
+    setDot(dom.factToolsDot, 'warn');
+    setText(dom.factTools, '不可用');
+    setText(dom.factToolsSub, mcpReasonText(tools.reason) || '原生 MCP 不可用');
+  } else {
+    const count = Array.isArray(tools.servers) ? tools.servers.length : 0;
+    setDot(dom.factToolsDot, 'ok');
+    setText(dom.factTools, count + ' 个服务器');
+    setText(dom.factToolsSub, '原生默认工具保持不变');
+  }
 }
 
 let recentSignature = '';
@@ -1373,28 +2122,88 @@ function renderRecent(recent) {
     time.className = 'mono';
     time.textContent = fmtTime(row && row.at);
     const model = document.createElement('td');
-    model.className = 'mono cell-id';
-    model.textContent = (row && row.model) || '—';
+    model.className = 'mono cell-id cell-model';
+    model.textContent = (row && (row.upstreamModelId || row.model)) || '—';
+    if (row && row.connectionId) {
+      const connection = document.createElement('span');
+      connection.className = 'cell-name';
+      connection.textContent = row.connectionId;
+      model.append(connection);
+    }
     const protocol = document.createElement('td');
+    protocol.className = 'col-proto';
     protocol.textContent = row && row.protocol === 'chat' ? 'chat' : 'responses';
     const status = document.createElement('td');
     status.className = 'num mono';
     status.textContent = row && typeof row.status === 'number' ? String(row.status) : '—';
     status.dataset.tone = row && row.status >= 400 ? 'bad' : 'neutral';
-    const ms = document.createElement('td');
-    ms.className = 'num mono';
-    ms.textContent = row && typeof row.ms === 'number' ? String(row.ms) + ' ms' : '—';
+    /* 首字节不是首 token：流式首个事件才算 TTFT，这里只报告实际测到的耗时。 */
+    const firstByte = document.createElement('td');
+    firstByte.className = 'num mono col-firstbyte';
+    firstByte.textContent = row && typeof row.firstByteMs === 'number' ? fmtMs(row.firstByteMs) : '未测';
+    const total = document.createElement('td');
+    total.className = 'num mono col-total';
+    total.textContent = row && typeof row.ms === 'number' ? fmtMs(row.ms) : '—';
+    const usage = document.createElement('td');
+    usage.className = 'num mono col-usage';
+    usage.textContent = usageText(row && row.usage);
+    usage.setAttribute('title', usage.textContent);
+    /* 平均输出速率是整段请求的平均值，含等待首字节的时间；不是 TPOT，也不是
+       首 token 速度。没有可测的完成请求就没有速率，写「未提供」而不是 0。 */
+    const rate = document.createElement('td');
+    rate.className = 'num mono col-rate';
+    rate.textContent = rateText(row && row.rate);
+    rate.setAttribute('title', rateText(row && row.rate));
+    /* 上下文占用是**上一次请求**的输入量，不是运行中会话的实时占用。 */
+    const requestContext = document.createElement('td');
+    requestContext.className = 'num mono col-reqctx';
+    requestContext.textContent = requestContextText(row && row.context);
+    requestContext.setAttribute('title', requestContextText(row && row.context));
     if (row && row.error) {
       const error = document.createElement('span');
       error.className = 'cell-error';
       error.textContent = row.error;
       status.append(error);
     }
-    tr.append(time, model, protocol, status, ms);
+    tr.append(time, model, protocol, status, firstByte, total, rate, usage, requestContext);
     return tr;
   });
   if (dom.recentBody) dom.recentBody.replaceChildren(...rows);
   setHidden(dom.recentEmpty, rows.length > 0);
+}
+
+/* 速率只认契约里的字段与口径；`basis` 不认识时不猜单位，直接说明未提供。 */
+function rateText(rate) {
+  if (!rate || typeof rate !== 'object') return '未提供';
+  if (rate.basis !== 'total_request_time') return '未提供';
+  const value = Number(rate.averageOutputTokensPerSecond);
+  if (!Number.isFinite(value) || value <= 0) return '未提供';
+  return (value >= 100 ? String(Math.round(value)) : value.toFixed(1)) + ' tok/s';
+}
+
+/* `context.limitTokens` 是这条模型**已设定的上下文预算**，不是上游硬上限
+   `contextLimit`：所以这里只说「占预算多少」，不写成「距上限还剩多少」。
+   比例优先用后端算好的值，缺失时才用两个实测数相除。 */
+function requestContextText(context) {
+  if (!context || typeof context !== 'object') return '未提供';
+  const used = Number(context.usedTokens);
+  const budget = Number(context.limitTokens);
+  if (!Number.isFinite(used) || used < 0) return '未提供';
+  const head = fmtCount(used) + ' tokens';
+  if (!Number.isFinite(budget) || budget <= 0) return head + ' · 预算未知';
+  const ratio = Number.isFinite(Number(context.ratio)) ? Number(context.ratio) : used / budget;
+  return head + ' · 占预算 ' + Math.round(ratio * 100) + '%（' + fmtK(budget) + '）';
+}
+
+/* 用量只在收到上游真实 usage 时显示；缺失时写「未提供」，绝不当成 0。 */
+function usageText(usage) {
+  if (!usage || typeof usage !== 'object') return '未提供';
+  const input = Number.isFinite(usage.inputTokens) ? usage.inputTokens
+    : Number.isFinite(usage.prompt_tokens) ? usage.prompt_tokens : null;
+  const output = Number.isFinite(usage.outputTokens) ? usage.outputTokens
+    : Number.isFinite(usage.completion_tokens) ? usage.completion_tokens : null;
+  if (input === null && output === null) return '未提供';
+  return (input === null ? '?' : fmtCount(input)) + ' / ' + (output === null ? '?' : fmtCount(output));
 }
 
 /* ---------- render: operation ---------- */
@@ -1559,6 +2368,22 @@ function buildModelRow(model, saved) {
     idCell.append(flag);
   }
 
+  /* 路由列把「连接」和「真实上游 ID」放在同一个格里：这两个值一起才说明
+     请求实际去了哪里，缺一个都会让用户以为本机路由 ID 就是上游 ID。 */
+  const route = document.createElement('td');
+  route.className = 'col-route';
+  const routing = routingOf(model);
+  const upstream = document.createElement('span');
+  upstream.className = 'mono cell-id';
+  upstream.textContent = routing.upstream || '—';
+  upstream.setAttribute('title', routing.upstream || '');
+  const connection = document.createElement('span');
+  connection.className = 'cell-name';
+  connection.textContent = routing.connectionId
+    ? connectionLabel(findConnection(state.data, routing.connectionId)) + ' · ' + routing.connectionId
+    : '旧版单上游';
+  route.append(upstream, connection);
+
   const proto = document.createElement('td');
   proto.className = 'col-proto';
   const protoTag = document.createElement('span');
@@ -1569,6 +2394,17 @@ function buildModelRow(model, saved) {
   const context = document.createElement('td');
   context.className = 'num mono';
   context.textContent = fmtK(model.contextWindow);
+  if (model.contextLimit) {
+    const limit = document.createElement('span');
+    limit.className = 'cell-name';
+    limit.textContent = '上限 ' + fmtK(model.contextLimit);
+    context.append(limit);
+  } else {
+    const limit = document.createElement('span');
+    limit.className = 'cell-name';
+    limit.textContent = '上限未知';
+    context.append(limit);
+  }
 
   const output = document.createElement('td');
   output.className = 'num mono col-out';
@@ -1639,8 +2475,554 @@ function buildModelRow(model, saved) {
     actions.append(edit, remove);
   }
 
-  tr.append(idCell, proto, context, output, caps, efforts, actions);
+  tr.append(idCell, route, proto, context, output, caps, efforts, actions);
   return tr;
+}
+
+/* ---------- render: candidate picker ---------- */
+
+/* 近似匹配只在本地做，且只用于排序，不改变候选本身：上游 ID 一律按原样展示和保存。 */
+function normalizeNeedle(value) {
+  return String(value || '').toLowerCase().replace(/[\s\-_./]+/g, '');
+}
+
+function subsequenceScore(needle, haystack) {
+  if (!needle || !haystack) return 0;
+  let index = 0;
+  let gaps = 0;
+  for (const char of haystack) {
+    if (char === needle[index]) index++;
+    else if (index > 0) gaps++;
+    if (index === needle.length) break;
+  }
+  if (index < needle.length) return 0;
+  return Math.max(1, 100 - gaps);
+}
+
+function connectionScore(model, needle, rawNeedle) {
+  if (!needle) return 1;
+  const id = normalizeNeedle(model && model.id);
+  const name = normalizeNeedle(model && model.name);
+  /* 原文（保留分隔符）直接包含查询时加权：把 glm5.3 和 glm-5.3 归一化后是同一个
+     串，但用户敲的是哪一种写法，说明他更可能指哪一个。 */
+  const rawId = String(model && model.id || '').toLowerCase();
+  const rawName = String(model && model.name || '').toLowerCase();
+  let bonus = 0;
+  if (rawNeedle) {
+    if (rawId.includes(rawNeedle)) bonus += 60;
+    if (rawName.includes(rawNeedle)) bonus += 40;
+  }
+  if (id === needle) return 1000 + bonus;
+  if (id.startsWith(needle)) return 900 + bonus;
+  if (id.includes(needle)) return 800 + bonus;
+  if (name === needle) return 700 + bonus;
+  if (name.startsWith(needle)) return 650 + bonus;
+  if (name.includes(needle)) return 600 + bonus;
+  const idScore = subsequenceScore(needle, id);
+  const nameScore = subsequenceScore(needle, name);
+  return Math.max(idScore, nameScore) * 5 + bonus;
+}
+
+function rankedCandidates(models, query) {
+  const needle = normalizeNeedle(query);
+  const rawNeedle = String(query || '').trim().toLowerCase();
+  const list = (models || []).filter((model) => model && typeof model.id === 'string');
+  if (!needle) return list.slice(0, 60);
+  return list
+    .map((model) => ({ model, score: connectionScore(model, needle, rawNeedle) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score
+      || String(left.model.id).localeCompare(String(right.model.id)))
+    .slice(0, 60)
+    .map((entry) => entry.model);
+}
+
+function renderPicker() {
+  const picker = state.picker;
+  if (!picker.open || !state.editor) {
+    setHidden(dom.picker, true);
+    return;
+  }
+  setHidden(dom.picker, false);
+  const draft = state.editor.draft;
+  const connection = draft.connectionId ? findConnection(state.data, draft.connectionId) : null;
+  setText(dom.pickerLede, connection
+    ? '候选来自连接「' + connectionLabel(connection) + '」的供应商目录与最近一次上游读取；'
+      + '输入关键词由服务端按别名与片段检索，点选后才会写入模型。'
+    : '未选择命名连接：候选来自所选供应商预设的目录。选择一个连接可同时看到它上次读取到的模型。');
+
+  if (dom.pickerQ) dom.pickerQ.value = picker.query;
+  if (dom.pickerScan) {
+    /* The explicit read only makes sense for a saved connection; the catalog
+       itself never depends on it. */
+    dom.pickerScan.disabled = picker.busy || !draft.connectionId;
+    dom.pickerScan.hidden = !draft.connectionId;
+    setText(dom.pickerScan, picker.busy ? '正在读取…' : '读取上游目录');
+  }
+  if (dom.pickerState) {
+    if (picker.busy) setText(dom.pickerState, '正在搜索…');
+    else if (picker.reason) setText(dom.pickerState, discoveryReasonText(picker.reason));
+    else if (picker.state === 'searched') {
+      const count = picker.models ? picker.models.length : 0;
+      const parts = [count + ' 个候选'];
+      if (picker.checkedAt) parts.push('上游读取于 ' + fmtTime(picker.checkedAt));
+      setText(dom.pickerState, parts.join(' · '));
+    } else setText(dom.pickerState, '尚未搜索');
+  }
+  if (dom.pickerNote) {
+    /* Truthful about where the list came from: a preset-backed list is the
+       vendor's documented catalog, not a live read of this endpoint. */
+    const note = picker.state === 'searched' && picker.models && picker.models.length
+      ? '列表来自供应商目录' + (picker.checkedAt ? '与最近一次上游读取' : '')
+        + '；模型 ID 原样保留，能力与预算在你确认后才写入。'
+      : '';
+    setHidden(dom.pickerNote, !note);
+    setText(dom.pickerNote, note);
+  }
+
+  /* The server already ranked matches; the local list is only a bounded view of
+     what came back, so no second ranking algorithm can disagree with it. */
+  const candidates = (picker.models || []).filter((model) => model && typeof model.id === 'string');
+  const empty = candidates.length === 0;
+  setHidden(dom.pickerEmpty, !empty);
+  setHidden(dom.pickerList, empty);
+  if (empty) {
+    setText(dom.pickerEmptyTitle, picker.busy ? '正在搜索候选'
+      : picker.state === 'searched' ? '没有匹配的候选' : '尚未载入候选');
+    setText(dom.pickerEmptyNote, picker.busy
+      ? '稍候；供应商目录会先返回，已保存连接的上次读取结果会一并合并。'
+      : picker.state === 'searched'
+        ? '换一个关键词，或清空搜索查看该连接的全部候选。'
+        : '选择一条连接或供应商预设后，候选会自动载入。');
+    return;
+  }
+  if (dom.pickerList) {
+    const signature = JSON.stringify(candidates.map((model) => model.id));
+    if (dom.pickerList.dataset.signature !== signature) {
+      dom.pickerList.dataset.signature = signature;
+      dom.pickerList.replaceChildren(...candidates.map(buildCandidateRow));
+    }
+  }
+}
+
+function buildCandidateRow(model) {
+  const li = document.createElement('li');
+  li.className = 'candidate';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'candidate__btn';
+  button.dataset.candidateId = model.id;
+
+  const head = document.createElement('span');
+  head.className = 'candidate__head';
+  const id = document.createElement('span');
+  id.className = 'candidate__id mono';
+  id.textContent = model.id;
+  head.append(id);
+  if (model.name && model.name !== model.id) {
+    const name = document.createElement('span');
+    name.className = 'candidate__name';
+    name.textContent = model.name;
+    head.append(name);
+  }
+
+  const facts = document.createElement('span');
+  facts.className = 'candidate__facts';
+  const parts = [];
+  if (model.contextWindow) parts.push('上下文 ' + fmtK(model.contextWindow));
+  if (model.maxOutputTokens) parts.push('输出 ' + fmtK(model.maxOutputTokens));
+  if (model.tools === true) parts.push('工具');
+  if (model.reasoning === true) parts.push('推理');
+  if (Array.isArray(model.inputModalities) && model.inputModalities.includes('image')) parts.push('视觉');
+  if (Array.isArray(model.protocols) && model.protocols.length) parts.push(model.protocols.map(protocolLabel).join('/'));
+  facts.textContent = parts.join(' · ') || '上游未提供能力信息';
+
+  button.append(head, facts);
+  li.append(button);
+  return li;
+}
+
+/* 协议状态必须区分三种情况，M29 的 parser 已经把其中两种解析清楚了：
+   1. 数组（一个或多个）：上游/preset 的真实声明，多值时默认偏好 Responses；
+   2. 显式空数组：端点明确声明不支持任何协议（`supported:false` 或空列表），
+      这是权威判定，UI 不得回退到 preset 再猜一次；
+   3. 字段缺失：parser 已按 M29 合同继承已验证的 preset 协议，缺失只表示
+      「这条公开行没带」，仍按未知处理并要求用户显式选择。
+   把 1 与 2、3 混为一谈会推翻 M29 三轮修正。 */
+function candidateProtocolState(model) {
+  if (!model || !Array.isArray(model.protocols)) return { kind: 'absent', list: [] };
+  const list = model.protocols.filter((value) => value === 'chat' || value === 'responses');
+  return list.length ? { kind: 'declared', list } : { kind: 'explicit-empty', list: [] };
+}
+
+/* 保留旧名，返回声明过的协议（空/缺失都返回 null），调用方需区分时用上面的状态。 */
+function candidateProtocols(model) {
+  const state = candidateProtocolState(model);
+  return state.kind === 'declared' ? state.list : null;
+}
+
+/* 多协议时默认 Responses：与网关默认族一致，用户仍可改选。 */
+function preferredProtocol(protocols) {
+  if (!protocols || !protocols.length) return null;
+  return protocols.includes('responses') ? 'responses' : protocols[0];
+}
+
+function pickCandidate(upstreamId) {
+  const editor = state.editor;
+  if (!editor || !upstreamId) return;
+  const model = (state.picker.models || []).find((row) => row && row.id === upstreamId) || null;
+  const draft = editor.draft;
+  const protocolState = candidateProtocolState(model);
+  draft.upstreamModelId = upstreamId;
+  draft.name = model && model.name ? model.name : draft.name;
+
+  const preset = providerPreset(draft.providerPresetId) || providerPreset(
+    (findConnection(state.data, draft.connectionId) || {}).providerPresetId);
+  const presetProtocols = preset && Array.isArray(preset.protocols) && preset.protocols.length ? preset.protocols : null;
+  /* 只有「字段缺失」才允许沿用 preset；显式空数组是权威的「不支持」，不 fallback。 */
+  const chosen = protocolState.kind === 'declared'
+    ? preferredProtocol(protocolState.list)
+    : protocolState.kind === 'absent'
+      ? preferredProtocol(presetProtocols)
+      : null;
+  draft.protocolExplicitEmpty = protocolState.kind === 'explicit-empty';
+
+  if (chosen) {
+    /* 声明过协议（一个或多个）就自动生成路由；多协议按偏好选一个，
+       用户可通过协议按钮或直接改路由 ID 覆盖。 */
+    const declared = protocolState.kind === 'declared';
+    draft.id = routeIdFor(draft.connectionId, upstreamId, chosen);
+    draft.protocolConfirmed = true;
+    draft.protocolSource = declared ? 'discovery' : 'preset';
+    draft.protocolOptions = declared ? protocolState.list : presetProtocols;
+    draft.protocolHint = declared && protocolState.list.length > 1
+      ? '上游声明 ' + protocolState.list.map(protocolLabel).join(' 与 ') + '，已按 ' + protocolLabel(chosen)
+        + ' 生成路由；可切换协议。'
+      : declared ? null
+        : '上游目录没有声明协议，当前按预设「' + (preset ? preset.name || preset.id : '') + '」的 '
+          + protocolLabel(chosen) + ' 填写；请确认后再保存。';
+  } else {
+    draft.id = '';
+    draft.protocolConfirmed = false;
+    draft.protocolSource = null;
+    draft.protocolOptions = null;
+    /* 显式空与缺失要用不同的话说清楚，否则用户会以为只是「目录没写」。 */
+    draft.protocolHint = protocolState.kind === 'explicit-empty'
+      ? '该端点明确声明不支持 Chat 或 Responses 协议，因此没有生成路由。'
+        + '请确认上游能力后手动填写，或改用其他连接。'
+      : '上游目录没有声明协议，因此没有自动生成路由 ID。'
+        + '请选择协议或手动填写路由 ID；协议决定调用 Chat 还是 Responses 接口。';
+  }
+  if (model) {
+    if (model.contextWindow) draft.context = String(model.contextWindow);
+    draft.contextLimit = model.contextWindow ? String(model.contextWindow) : '';
+    if (typeof model.tools === 'boolean') draft.tools = model.tools;
+    if (typeof model.reasoning === 'boolean') draft.reasoning = model.reasoning;
+    if (Array.isArray(model.inputModalities)) draft.vision = model.inputModalities.includes('image');
+    if (model.maxOutputTokens) draft.output = String(model.maxOutputTokens);
+    if (Array.isArray(model.reasoningEfforts) && model.reasoningEfforts.length) {
+      draft.efforts = model.reasoningEfforts.join(', ');
+    }
+    /* 来源必须是这条候选自己的，不能一律写成 discovery：model-search 会把
+       静态 preset 与最近一次成功 discovery 合并，两者的来源不同。优先用后端
+       给出的 model.metadataSource / model.source，都没有时按「这次读取有没有
+       真实目录」判断，仍无法确定就标 manual 而不是编造 discovery。 */
+    draft.metadataSource = candidateMetadataSource(model);
+  }
+  editor.serverErrors = [];
+  editor.budgetNote = null;
+  fillEditorFields();
+  state.picker.open = false;
+  renderPicker();
+  renderEditor();
+  renderModels();
+  if (dom.mId && dom.mId.focus) dom.mId.focus();
+}
+
+/* 显式切换协议：只重写路由 ID 的家族前缀，上游 ID 原样保留。
+   手写路由 ID 仍是高级覆盖手段，不是多协议的必经步骤。 */
+function chooseProtocol(protocol) {
+  const editor = state.editor;
+  if (!editor || !['chat', 'responses'].includes(protocol)) return;
+  const draft = editor.draft;
+  const upstream = String(draft.upstreamModelId || '').trim();
+  draft.protocolSource = 'manual';
+  draft.protocolConfirmed = true;
+  if (upstream && draft.connectionId) {
+    draft.id = routeIdFor(draft.connectionId, upstream, protocol);
+    draft.protocolHint = '已按 ' + protocolLabel(protocol) + ' 生成路由；上游模型 ID 保持不变。';
+    if (dom.mId) dom.mId.value = draft.id;
+  } else {
+    draft.protocolHint = upstream
+      ? '请先选择所属连接，再由协议生成路由。'
+      : '请先填写上游模型 ID，再由协议生成路由。';
+  }
+  renderEditor();
+  renderModels();
+}
+
+/* ---------- render: MCP editor ---------- */
+
+function renderToolsEditor() {
+  const editing = state.tools.editing;
+  if (!editing) {
+    setHidden(dom.toolsEditor, true);
+    return;
+  }
+  setHidden(dom.toolsEditor, false);
+  const transport = dom.teTransport ? dom.teTransport.value : 'stdio';
+  setHidden(dom.teStdio, transport !== 'stdio');
+  setHidden(dom.teRemote, transport === 'stdio');
+  if (dom.teSave) {
+    dom.teSave.disabled = state.tools.busy;
+    setText(dom.teSave, state.tools.busy ? '正在提交…' : '添加到 Kimi 原生配置');
+  }
+  if (dom.teNameHint) setText(dom.teNameHint, '名称以字母或数字开头，可用点、下划线与连字符，最长 64 字符。');
+}
+
+function openToolsEditor() {
+  state.tools.editing = true;
+  state.tools.errors = [];
+  if (dom.teName) dom.teName.value = '';
+  if (dom.teTransport) dom.teTransport.value = 'stdio';
+  if (dom.teCommand) dom.teCommand.value = '';
+  if (dom.teArgs) dom.teArgs.value = '';
+  if (dom.teEnv) dom.teEnv.value = '';
+  if (dom.teUrl) dom.teUrl.value = '';
+  if (dom.teHeaders) dom.teHeaders.value = '';
+  if (dom.teEnabled) dom.teEnabled.checked = true;
+  renderErrorList(dom.teErrors, []);
+  renderToolsEditor();
+  if (dom.teName && dom.teName.focus) dom.teName.focus();
+}
+
+function closeToolsEditor() {
+  state.tools.editing = false;
+  renderErrorList(dom.teErrors, []);
+  renderToolsEditor();
+}
+
+function readToolsEditor() {
+  const transport = dom.teTransport ? dom.teTransport.value : 'stdio';
+  if (transport === 'stdio') {
+    const env = parseEnvLines(dom.teEnv ? dom.teEnv.value : '');
+    return {
+      draft: {
+        name: dom.teName ? dom.teName.value : '',
+        transport,
+        enabled: Boolean(dom.teEnabled && dom.teEnabled.checked),
+        command: dom.teCommand ? dom.teCommand.value : '',
+        args: parseLines(dom.teArgs ? dom.teArgs.value : ''),
+        env: env.env,
+      },
+      invalid: env.invalid.map((line) => '环境变量格式无效：' + truncate(line, 40)),
+    };
+  }
+  const headers = parseHeaderLines(dom.teHeaders ? dom.teHeaders.value : '');
+  return {
+    draft: {
+      name: dom.teName ? dom.teName.value : '',
+      transport,
+      enabled: Boolean(dom.teEnabled && dom.teEnabled.checked),
+      url: dom.teUrl ? dom.teUrl.value : '',
+      headers: headers.headers,
+    },
+    invalid: headers.invalid.map((line) => '请求头格式无效：' + truncate(line, 40)),
+  };
+}
+
+function submitToolsEditor() {
+  if (!state.tools.editing) return;
+  const { draft, invalid } = readToolsEditor();
+  const { errors, server } = mcpServerPayload(draft);
+  const messages = invalid.concat(errors);
+  renderErrorList(dom.teErrors, messages);
+  if (messages.length) return;
+  void submitTools({ action: 'add', server }, { successMessage: '已添加到 Kimi 原生 MCP 配置。' }).then((result) => {
+    if (result && result.ok === true) closeToolsEditor();
+  });
+}
+
+/* ---------- candidate search ---------- */
+
+/* Picking a provider must not require a working `GET /models`. The unified
+   search endpoint answers from the shipped preset for that connection and adds
+   the last successful discovery, so an unsaved or offline upstream still shows
+   its documented catalog. `runDiscovery` stays the explicit "read upstream now"
+   action and never replaces what the search returns. */
+
+const PICKER_DEBOUNCE_MS = 250;
+
+function pickerScope() {
+  const draft = state.editor && state.editor.draft;
+  return draft ? String(draft.connectionId || '').trim() : '';
+}
+
+/* One in-flight request per picker: a fast connection or keyword change must not
+   let an older answer land on newer state. */
+async function searchCandidates(query, { connectionId = pickerScope(), keepReason = false } = {}) {
+  const picker = state.picker;
+  const seq = ++picker.seq;
+  picker.busy = true;
+  if (!keepReason) picker.reason = null;
+  renderPicker();
+  try {
+    const body = { query: String(query || '') };
+    if (connectionId) body.connectionId = connectionId;
+    else if (state.editor && state.editor.draft.providerPresetId) {
+      body.presetId = state.editor.draft.providerPresetId;
+    }
+    const res = await request(API.modelSearch, { method: 'POST', body });
+    if (seq !== state.picker.seq) return null;
+    const models = res && Array.isArray(res.models) ? res.models : [];
+    picker.models = models;
+    picker.state = 'searched';
+    picker.hint = models.length ? null : 'no-match';
+    picker.reason = null;
+    return res;
+  } catch (error) {
+    if (seq !== state.picker.seq) return null;
+    picker.reason = error.code || 'model_search_failed';
+    picker.state = 'failed';
+    return null;
+  } finally {
+    if (seq === state.picker.seq) {
+      picker.busy = false;
+      renderPicker();
+    }
+  }
+}
+
+let pickerTimer = null;
+function scheduleSearch() {
+  const picker = state.picker;
+  if (pickerTimer) clearTimeout(pickerTimer);
+  const query = picker.query;
+  pickerTimer = setTimeout(() => {
+    pickerTimer = null;
+    if (!state.picker.open) return;
+    void searchCandidates(query);
+  }, PICKER_DEBOUNCE_MS);
+}
+
+/* 行内连接检查：按行携带该行的 connectionId，结果也按 connectionId 认领。
+   后端绝不隐式挑选连接；这里同样只检查用户点的那一行。 */
+async function runConnectionCheck(connectionId) {
+  const data = state.data;
+  if (!data || !connectionId) return null;
+  if (state.pendingAction) {
+    showToast('已有操作正在进行，等待它结束后再试。', 'error');
+    return null;
+  }
+  state.connChecks = { ...state.connChecks, [connectionId]: { ...(state.connChecks[connectionId] || {}), busy: true } };
+  renderConnections();
+  const id = actionUUID();
+  try {
+    const res = await request(API.actions, {
+      method: 'POST',
+      body: { id, at: Date.now(), action: 'check-upstream', connectionId },
+    });
+    const op = res && res.operation ? res.operation : null;
+    if (op && typeof op.connectionId === 'string' && op.connectionId !== connectionId) {
+      showToast('检查结果与所在连接不符，已忽略。', 'error');
+      return null;
+    }
+    const diag = (state.data && state.data.diagnostics && state.data.diagnostics.upstream) || {};
+    const result = op && op.state ? op
+      : diag && diag.connectionId === connectionId ? diag : null;
+    const recorded = result ? { state: result.state,
+      ...(Number.isInteger(result.httpStatus) ? { httpStatus: result.httpStatus } : {}),
+      ...(Number.isInteger(result.modelCount) ? { modelCount: result.modelCount } : {}),
+      ...(Number.isFinite(result.ms) ? { ms: result.ms } : {}),
+      ...(result.reason ? { reason: result.reason } : {}), connectionId } : { state: 'interrupted', connectionId };
+    state.connChecks = { ...state.connChecks, [connectionId]: recorded };
+    if (result && result.state === 'passed') showToast('连接「' + connectionId + '」可用。', 'ok');
+    else showToast('连接「' + connectionId + '」检查未通过：'
+      + (upstreamReasonText(result && result.reason) || '请稍后再试') + '。', 'error');
+    await loadState({ silent: true });
+    return { ...state.connChecks[connectionId], busy: false };
+  } catch (error) {
+    state.connChecks = { ...state.connChecks, [connectionId]: { state: 'failed', reason: error.code || null, connectionId } };
+    showToast(error.message || '连接检查未完成，请稍后再试。', 'error');
+    return null;
+  } finally {
+    const current = state.connChecks[connectionId];
+    if (current) {
+      state.connChecks = { ...state.connChecks, [connectionId]: { ...current, busy: false } };
+    }
+    renderConnections();
+  }
+}
+
+/* The explicit read is still available for a saved connection. A pass proves the
+   endpoint answers; a failure keeps the preset-backed search usable. */
+async function runDiscovery(connectionId) {
+  if (!connectionId) {
+    showToast('请选择一条已保存的连接。', 'error');
+    return null;
+  }
+  const data = state.data;
+  if (!data) return null;
+  const seq = ++state.picker.seq;
+  state.picker.busy = true;
+  state.picker.reason = null;
+  renderPicker();
+  try {
+    const res = await request(API.discovery, { method: 'POST', body: { revision: data.revision, connectionId } });
+    const discovery = res && res.discovery;
+    if (seq !== state.picker.seq) return null;
+    if (!discovery || !Array.isArray(discovery.models)) {
+      showToast('上游目录读取结果格式不被接受。', 'error');
+      return null;
+    }
+    state.picker.checkedAt = discovery.checkedAt || null;
+    state.picker.source = discovery.sourceURL || null;
+    if (discovery.state !== 'passed') {
+      /* A failed read is reported, not turned into an empty catalog: whatever the
+         preset-backed search already showed stays on screen. */
+      state.picker.reason = discovery.reason || null;
+      showToast(discoveryReasonText(discovery.reason)
+        + (Number.isInteger(discovery.httpStatus) ? '（HTTP ' + discovery.httpStatus + '）' : ''), 'error');
+      return discovery;
+    }
+    showToast('读取到 ' + discovery.modelCount + ' 个候选模型。', 'ok');
+    return discovery;
+  } catch (error) {
+    if (seq !== state.picker.seq) return null;
+    state.picker.reason = error.code || null;
+    showToast(discoveryReasonText(error.code) || error.message || '读取上游目录失败。', 'error');
+    return null;
+  } finally {
+    if (seq === state.picker.seq) {
+      state.picker.busy = false;
+      renderPicker();
+    }
+    /* Either way the catalog now comes from the unified search, which merges the
+       fresh discovery with the preset and keeps aliases and provenance. */
+    if (state.picker.open) await searchCandidates(state.picker.query);
+  }
+}
+
+function openPicker() {
+  const editor = state.editor;
+  if (!editor) return;
+  state.picker.open = true;
+  state.picker.query = '';
+  state.picker.models = null;
+  state.picker.state = null;
+  state.picker.reason = null;
+  state.picker.hint = null;
+  state.picker.scope = pickerScope();
+  renderPicker();
+  if (dom.pickerQ && dom.pickerQ.focus) dom.pickerQ.focus();
+  /* Opening the picker is the moment the catalog should be there: the preset
+     answers immediately, and a saved connection's last discovery is merged in. */
+  void searchCandidates('', { connectionId: state.picker.scope });
+}
+
+function closePicker() {
+  state.picker.open = false;
+  renderPicker();
 }
 
 function iconUse(name) {
@@ -1672,14 +3054,29 @@ function openEditor(model) {
         vision: hasVision(model),
         efforts: (model.reasoningEfforts || []).join(', '),
         defaultEffort: model.defaultEffort || '',
+        connectionId: model.connectionId || '',
+        upstreamModelId: model.upstreamModelId || '',
+        contextLimit: model.contextLimit ? String(model.contextLimit) : '',
+        metadataSource: model.metadataSource || null,
       }
-      : { id: '', name: '', context: '', output: '', tools: true, reasoning: false, vision: false, efforts: '', defaultEffort: '' },
+      : {
+        id: '', name: '', context: '', output: '', tools: true, reasoning: false, vision: false,
+        efforts: '', defaultEffort: '',
+        /* 新模型默认落在唯一一条命名连接上：旧式无连接的路由只在确实没有命名连接时使用。 */
+        connectionId: defaultConnectionId(),
+        upstreamModelId: '', contextLimit: '', metadataSource: null,
+      },
   };
   fillEditorFields();
   renderEditor();
   renderModels();
   const focusTarget = state.editor.originalId ? dom.mName : dom.mId;
   if (focusTarget && focusTarget.focus) focusTarget.focus();
+}
+
+function defaultConnectionId() {
+  const rows = (connectionRowsOf(state.data) || []).filter((row) => !row.legacy);
+  return rows.length ? rows[0].id : '';
 }
 
 function closeEditor(force) {
@@ -1690,7 +3087,10 @@ function closeEditor(force) {
     return;
   }
   state.editor = null;
+  state.picker = { open: false, models: null, query: '', state: null, checkedAt: null, source: null, reason: null,
+    busy: false, seq: 0, hint: null, scope: null };
   renderEditor();
+  renderPicker();
   renderModels();
 }
 
@@ -1699,6 +3099,7 @@ function fillEditorFields() {
   if (!draft) return;
   if (dom.mId) dom.mId.value = draft.id;
   if (dom.mName) dom.mName.value = draft.name;
+  if (dom.mUpstream) dom.mUpstream.value = draft.upstreamModelId || '';
   if (dom.mContext) dom.mContext.value = draft.context;
   if (dom.mOutput) dom.mOutput.value = draft.output;
   if (dom.mTools) dom.mTools.checked = draft.tools;
@@ -1711,7 +3112,10 @@ function readEditorFields() {
   const draft = state.editor && state.editor.draft;
   if (!draft) return;
   draft.id = dom.mId ? dom.mId.value : draft.id;
+  /* 手写路由 ID 就是用户显式选择了协议：末段决定 Chat 还是 Responses。 */
+  if (draft.protocolConfirmed === false && String(draft.id || '').trim()) draft.protocolConfirmed = true;
   draft.name = dom.mName ? dom.mName.value : draft.name;
+  draft.upstreamModelId = dom.mUpstream ? dom.mUpstream.value : draft.upstreamModelId;
   draft.context = dom.mContext ? dom.mContext.value : draft.context;
   draft.output = dom.mOutput ? dom.mOutput.value : draft.output;
   draft.tools = Boolean(dom.mTools && dom.mTools.checked);
@@ -1726,7 +3130,8 @@ function editorDirty() {
   if (!editor) return false;
   if (!editor.originalId) {
     const draft = editor.draft;
-    return Boolean(draft.id || draft.name || draft.context || draft.output || draft.efforts || draft.reasoning || draft.vision);
+    return Boolean(draft.id || draft.name || draft.context || draft.output || draft.efforts || draft.reasoning
+      || draft.vision || draft.upstreamModelId);
   }
   const original = findModel(editor.originalId);
   return canonicalModel(buildModel(editor.draft).model) !== canonicalModel(original);
@@ -1737,8 +3142,57 @@ function validateEditor(editor) {
   const models = (state.data && state.data.models) || [];
   const duplicate = models.some((row) => row.id === model.id && row.id !== editor.originalId);
   if (duplicate) errors.push('已存在相同 ID 的模型。');
+  /* 连接若限制了协议，这里提前说明：服务端同样会拒绝，避免用户以为只是保存慢。 */
+  const connection = model.connectionId ? findConnection(state.data, model.connectionId) : null;
+  if (model.connectionId && !connection) errors.push('所选连接不在已保存的连接列表中。');
+  if (connection && Array.isArray(connection.protocols) && connection.protocols.length
+    && !connection.protocols.includes(model.protocol)) {
+    errors.push('连接「' + connectionLabel(connection) + '」只允许 ' + connection.protocols.map(protocolLabel).join('/')
+      + '，当前模型路由 ID 会被解析为 ' + protocolLabel(model.protocol) + '。');
+  }
   return { model, errors };
 }
+
+/* 上下文预算只做三种可信换算：固定预设、已知上限、手填。
+   上限未知时「完整」不可用，避免把猜测当成上游真实能力。 */
+function budgetStateFor(draft) {
+  const contextLimit = Number(draft && draft.contextLimit) > 0 ? Number(draft.contextLimit) : null;
+  const current = Number(draft && draft.context);
+  return {
+    contextLimit,
+    current: Number.isSafeInteger(current) && current > 0 ? current : null,
+    full: contextLimit,
+  };
+}
+
+function applyBudgetPreset(presetId) {
+  const editor = state.editor;
+  if (!editor) return;
+  readEditorFields();
+  const budget = budgetStateFor(editor.draft);
+  const preset = BUDGET_PRESETS.find((entry) => entry.id === presetId);
+  if (!preset) return;
+  if (preset.id === 'full') {
+    if (!budget.full) {
+      editor.budgetNote = '未知上游上限，无法选择「完整」。请先填写已知的上限或手动输入预算。';
+      renderEditor();
+      return;
+    }
+    editor.draft.context = String(budget.full);
+    editor.budgetNote = null;
+  } else {
+    if (budget.contextLimit && preset.tokens > budget.contextLimit) {
+      editor.budgetNote = preset.label + ' 超过该模型已知上限 ' + fmtTokens(budget.contextLimit) + '，不能选择。';
+      renderEditor();
+      return;
+    }
+    editor.draft.context = String(preset.tokens);
+    editor.budgetNote = null;
+  }
+  if (dom.mContext) dom.mContext.value = editor.draft.context;
+  renderEditor();
+}
+
 
 function renderEditor() {
   const editor = state.editor;
@@ -1752,7 +3206,19 @@ function renderEditor() {
   setText(dom.inspectorTitle, editor.originalId ? '编辑模型' : '新增模型');
 
   const id = String(editor.draft.id || '').trim();
-  setText(dom.mProtocol, modelFamilyFor(id) || '—');
+  const family = modelFamilyFor(id);
+  const protoButtons = dom.mProtocolGroup ? Array.from(dom.mProtocolGroup.querySelectorAll('[data-protocol]')) : [];
+  protoButtons.forEach((button) => {
+    const active = button.dataset.protocol === family;
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    const allowed = !editor.draft.protocolOptions
+      || editor.draft.protocolOptions.includes(button.dataset.protocol);
+    button.disabled = state.modelsSaving || !allowed;
+    button.setAttribute('title', allowed ? '按 ' + protocolLabel(button.dataset.protocol) + ' 生成路由'
+      : '上游未声明此协议');
+  });
+  renderEditorRouting(editor);
+  renderBudgetControls(editor);
 
   const parsed = parseEfforts(editor.draft.efforts);
   const chips = [];
@@ -1780,9 +3246,16 @@ function renderEditor() {
   const { errors } = validateEditor(editor);
   const ready = configReady(state.data);
   const dirty = editorDirty();
+  /* 协议未确认的候选不能被当作已确认能力保存：只有在用户填写了路由 ID
+     （即显式选择了协议）之后才允许保存。 */
+  const protocolPending = editor.draft.protocolConfirmed === false;
 
   if (dom.modelErrors) {
     const messages = (editor.serverErrors || []).concat(errors);
+    if (protocolPending) {
+      messages.unshift(editor.draft.protocolHint
+        || '上游没有声明协议，请手动填写路由 ID 确认协议后再保存。');
+    }
     if (!ready && state.data) messages.unshift('配置当前不是就绪状态，保存已禁用。请先重启面板。');
     if (editor.confirmClose) messages.unshift('关闭会丢弃未保存的修改。');
     setHidden(dom.modelErrors, messages.length === 0);
@@ -1802,10 +3275,123 @@ function renderEditor() {
     dom.modelErrors.replaceChildren(...nodes);
   }
 
-  if (dom.modelSave) dom.modelSave.disabled = errors.length > 0 || !ready || !dirty || state.modelsSaving;
+  if (dom.modelSave) dom.modelSave.disabled = errors.length > 0 || !ready || !dirty || state.modelsSaving || protocolPending;
   if (dom.modelSave) setText(dom.modelSave, state.modelsSaving ? '正在保存…' : '保存目录');
   if (dom.modelCancel) setText(dom.modelCancel, editor.confirmClose ? '继续编辑' : '取消');
   setText(dom.modelSaveNote, dirty ? '保存会提交整个模型目录，服务端立即应用。' : '没有未保存的修改。');
+}
+
+/* 路由区：连接下拉 + 上游 ID + 由两者推导的建议路由 ID。
+   建议值只在用户还没手改 ID 时自动填入，避免覆盖手写值。 */
+function renderEditorRouting(editor) {
+  const draft = editor.draft;
+  /* 协议推导的可见依据就是路由 ID 末段；这里是唯一推导点，提示与按钮共用。 */
+  const family = modelFamilyFor(draft.id);
+  const rows = (connectionRowsOf(state.data) || []).filter((row) => !row.legacy);
+  const options = rows.length
+    ? rows.map((row) => ({ value: row.id, label: row.name + ' · ' + row.id }))
+    : [{ value: '', label: '旧版单上游（无命名连接）' }];
+  if (draft.connectionId && !rows.some((row) => row.id === draft.connectionId)) {
+    options.push({ value: draft.connectionId, label: draft.connectionId + '（未在已保存连接中）' });
+  }
+  syncSelectOptions(dom.mConnection, options, draft.connectionId || '');
+  if (dom.mConnection) dom.mConnection.disabled = !rows.length || state.modelsSaving;
+
+  const suggested = routeIdFor(draft.connectionId, draft.upstreamModelId);
+  /* 只有用户明确给了上游 ID 且协议已被确认时，才把建议值自动写进路由 ID。
+     协议待确认（picker 命中未声明协议的候选）时留空，交给用户手填。 */
+  if (suggested && draft.protocolConfirmed !== false && !String(draft.id || '').trim()) {
+    draft.id = suggested;
+    if (dom.mId) dom.mId.value = suggested;
+  }
+  if (dom.mUpstreamHint) {
+    const upstream = String(draft.upstreamModelId || '').trim();
+    const id = String(draft.id || '').trim();
+    setText(dom.mUpstreamHint, upstream
+      ? '发给上游的 model 值按原样保存：' + upstream
+      : id ? '留空表示与路由 ID 相同（' + id + '）。' : '实际发给上游的 model 值，按原样保留。');
+  }
+  if (dom.mProtocolHint) {
+    const connection = draft.connectionId ? findConnection(state.data, draft.connectionId) : null;
+    const restricted = connection && Array.isArray(connection.protocols) && connection.protocols.length
+      ? connection.protocols : null;
+    /* 说明改成「当前可见推导结论 + 原因」：读到什么（路由 ID 末段/上游声明/
+       预设/连接限制）就说什么，不写无条件的规则句。连接限制与当前推导冲突时，
+       在本行内给出该连接实际需要的协议。 */
+    if (draft.protocolHint) setText(dom.mProtocolHint, draft.protocolHint);
+    else if (family && restricted && !restricted.includes(family)) {
+      setText(dom.mProtocolHint, '当前路由 ID 末段推导为 ' + protocolLabel(family)
+        + '，但连接「' + connectionLabel(connection) + '」只允许 '
+        + restricted.map(protocolLabel).join('/') + '；保存前请改用 '
+        + restricted.map(protocolLabel).join(' 或 ') + '。');
+    } else if (family) {
+      setText(dom.mProtocolHint, '由当前路由 ID 末段推导为 ' + protocolLabel(family)
+        + (restricted ? '；连接「' + connectionLabel(connection) + '」允许 ' + restricted.map(protocolLabel).join('/') + '。' : '。'));
+    } else if (draft.protocolSource === 'preset') {
+      setText(dom.mProtocolHint, '上游目录未声明协议；当前值来自供应商预设「'
+        + (providerPreset(draft.providerPresetId) ? providerPreset(draft.providerPresetId).name || providerPreset(draft.providerPresetId).id : '')
+        + '」，保存前请确认。');
+    } else if (restricted) {
+      setText(dom.mProtocolHint, '路由 ID 尚未推导出协议；连接「' + connectionLabel(connection) + '」只允许 '
+        + restricted.map(protocolLabel).join('/') + '。');
+    } else {
+      setText(dom.mProtocolHint, '填写路由 ID 后按末段推导协议；当前连接未限制协议。');
+    }
+  }
+  if (dom.mConnectionHint) {
+    setText(dom.mConnectionHint, rows.length
+      ? '连接决定请求发往哪个上游；上游模型 ID 决定上游看到的 model 值。'
+      : '还没有命名连接。先在「连接与工具」添加连接，或使用旧版单上游设置。');
+  }
+}
+
+/* 预算控件：只高亮真实匹配的预设；上限未知时「完整」禁用并说明，
+   任何预设都不会被标成「推荐」，因为套餐限制只能由上游决定。 */
+function renderBudgetControls(editor) {
+  const draft = editor.draft;
+  const budget = budgetStateFor(draft);
+  const group = dom.mBudgetGroup;
+  if (group) {
+    const buttons = Array.from(group.querySelectorAll('[data-budget]'));
+    buttons.forEach((button) => {
+      const presetId = button.dataset.budget;
+      const preset = BUDGET_PRESETS.find((entry) => entry.id === presetId);
+      /* 一个认不出的按钮值不能让整块渲染中断：那会连带让保存按钮、提示与
+         默认档位停在旧状态。认不出就如实禁用并说明，其余控件照常渲染。 */
+      if (!preset) {
+        button.setAttribute('aria-pressed', 'false');
+        button.disabled = true;
+        button.setAttribute('title', '未识别的预算预设：' + String(presetId));
+        return;
+      }
+      const active = preset.id === 'full'
+        ? Boolean(budget.full && budget.current === budget.full)
+        : Boolean(budget.current === preset.tokens);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      const limited = preset.id !== 'full' && budget.contextLimit && preset.tokens > budget.contextLimit;
+      const unknownFull = preset.id === 'full' && !budget.full;
+      button.disabled = Boolean(limited || unknownFull) || state.modelsSaving;
+      button.setAttribute('title', limited
+        ? preset.label + ' 超过已知上限 ' + fmtTokens(budget.contextLimit)
+        : unknownFull ? '上游上限未知，无法选择完整上下文' : '设为 ' + preset.label);
+    });
+  }
+  if (dom.mContext) dom.mContext.disabled = state.modelsSaving;
+  if (dom.mContextHint) {
+    if (budget.contextLimit) {
+      setText(dom.mContextHint, '已知上游上限 ' + fmtTokens(budget.contextLimit)
+        + '；预算不得超过它，超出的预设已禁用。');
+    } else {
+      setText(dom.mContextHint, '上游上限未知：预设只是起点，保存后请按套餐实际能力确认。');
+    }
+  }
+  if (editor.budgetNote && dom.modelErrors && dom.modelErrors.hidden) {
+    /* 预设被拒的说明单独呈现，不与保存错误混在一起。 */
+    setHidden(dom.modelErrors, false);
+    const p = document.createElement('p');
+    p.textContent = editor.budgetNote;
+    dom.modelErrors.replaceChildren(p);
+  }
 }
 
 function syncDefaultOptions(list, current) {
@@ -2166,6 +3752,25 @@ function renderSubagents() {
 
 /* ---------- render: connection ---------- */
 
+/* 重启说明按本进程的真实运行方式分流：state.service 只在后台服务场景给出
+   （service record 与本配置匹配时才认），此时教 service restart/status 找回；
+   前台终端运行的 panel 保留 Ctrl+C 三步。页面自身永远不执行重启。 */
+function renderRestartSteps(data) {
+  const service = data && data.service;
+  const running = service && service.mode === 'service';
+  if (dom.restartHead) {
+    setText(dom.restartHead, running
+      ? '本面板由后台服务运行'
+      : '本面板不提供自动重启，重启由你在终端完成。');
+  }
+  if (dom.restartService) setHidden(dom.restartService, !running);
+  if (dom.restartForeground) setHidden(dom.restartForeground, running);
+  if (!running) return;
+  if (dom.restartServiceRestart) setText(dom.restartServiceRestart, 'kimi-work-gateway service restart');
+  if (dom.restartServiceStatus) setText(dom.restartServiceStatus, 'kimi-work-gateway service status');
+  if (dom.restartServiceConfig) setText(dom.restartServiceConfig, service.config || '—');
+}
+
 function renderConnection() {
   const data = state.data;
   if (!data) return;
@@ -2203,17 +3808,542 @@ function renderConnection() {
   }
 
   if (dom.restartState) {
-    setText(dom.restartState, config.state === 'ready'
-      ? '当前配置文件已生效，没有待重启的修改。'
-      : config.state === 'changed'
-        ? '配置文件已修改，当前进程仍在使用启动时读取的连接。重启面板后生效。'
-        : '无法读取配置文件。修正后重启面板。');
+    const restartRequired = connectionsChanged(data);
+    setText(dom.restartState, config.state === 'unavailable'
+      ? '无法读取配置文件。修正后重启面板。'
+      : restartRequired
+        ? '连接或模型已有保存的修改，但当前进程仍在使用启动时读取的配置。模型与子代理保存已暂停；重启面板后生效。'
+        : config.state === 'ready'
+          ? '当前配置文件已生效，没有待重启的修改。'
+          : '配置文件已修改，当前进程仍在使用启动时读取的连接。重启面板后生效。');
   }
+  renderRestartSteps(data);
   setText(dom.restartFile, (config.file || '—') + ' · 修订 ' + shortRev(data.revision));
 
+  renderConnections();
+  renderContext();
+  renderTools();
   renderUpdates(data);
   renderDiagnostics(data);
 }
+
+/* ---------- render: named connections ---------- */
+
+function renderConnections() {
+  const data = state.data;
+  if (!data) return;
+  const available = connectionsAvailable(data);
+  setHidden(dom.connsUnavailable, available);
+  setHidden(dom.legacyPanel, available);
+  if (!available) {
+    setHidden(dom.connsList, true);
+    setHidden(dom.connsEmpty, true);
+    setHidden(dom.connEditor, true);
+    setHidden(dom.connsSave, true);
+    setHidden(dom.connsAdd, true);
+    setHidden(dom.connsReset, true);
+    setHidden(dom.connsDiff, true);
+    return;
+  }
+
+  const rows = state.conns.draft || [];
+  const named = rows.filter((row) => !row.legacy);
+  setHidden(dom.connsList, false);
+  setHidden(dom.connsEmpty, named.length > 0);
+  setHidden(dom.connsSave, false);
+  setHidden(dom.connsAdd, false);
+  setHidden(dom.connsReset, false);
+
+  const config = data.configuration || {};
+  const blocked = config.state === 'unavailable';
+  const dirty = connectionsDirty();
+  state.conns.dirty = dirty;
+
+  if (dom.connsSave) {
+    dom.connsSave.disabled = !dirty || state.connsSaving || blocked;
+    setText(dom.connsSave, state.connsSaving ? '正在保存…' : '保存连接');
+  }
+  if (dom.connsAdd) dom.connsAdd.disabled = state.connsSaving || blocked;
+  if (dom.connsReset) dom.connsReset.disabled = !dirty || state.connsSaving;
+  if (dom.connsDraft) {
+    setText(dom.connsDraft, blocked ? '配置文件不可读，无法保存连接'
+      : dirty ? '草稿尚未保存；保存后需重启面板才会生效' : '草稿与配置文件一致');
+    dom.connsDraft.dataset.dirty = String(dirty);
+  }
+
+  if (dom.connsErrors) {
+    /* 抽屉里的行内校验与会话级错误分开保存：轮询触发的重渲染不能把
+       「凭据文件不可用」这类提示抹掉，否则用户会反复重试同一个错误。 */
+    renderErrorList(dom.connsErrors, state.conns.errors || []);
+  }
+
+  if (dom.connsList) {
+    const signature = JSON.stringify([rows, state.connsSaving, config.state, state.connChecks]);
+    if (dom.connsList.dataset.signature !== signature) {
+      dom.connsList.dataset.signature = signature;
+      dom.connsList.replaceChildren(...rows.map((row, index) => buildConnectionRow(row, index)));
+    }
+  }
+
+  renderConnectionEditor();
+  renderConnectionsDiff();
+}
+
+function buildConnectionRow(row, index) {
+  const li = document.createElement('li');
+  li.className = 'conn-row';
+  li.dataset.connectionId = row.id || '';
+  if (row.legacy) li.dataset.legacy = 'true';
+
+  const main = document.createElement('div');
+  main.className = 'conn-row__main';
+  const title = document.createElement('p');
+  title.className = 'conn-row__name';
+  const name = document.createElement('span');
+  name.textContent = row.legacy ? '旧版单上游' : row.name || row.id;
+  title.append(name);
+  if (row.legacy) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = '兼容';
+    title.append(tag);
+  }
+  const url = document.createElement('p');
+  url.className = 'conn-row__url mono';
+  url.textContent = row.baseURL || '—';
+  url.setAttribute('title', row.baseURL || '');
+  main.append(title, url);
+
+  const meta = document.createElement('div');
+  meta.className = 'conn-row__meta';
+  const keyState = document.createElement('p');
+  keyState.className = 'conn-row__line';
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  dot.dataset.tone = row.apiKeySet || row.apiKey ? 'ok' : 'warn';
+  const keyText = document.createElement('span');
+  keyText.textContent = row.apiKey ? '本次已输入新 Key（未保存）'
+    : row.apiKeySet ? 'Key 已在运行环境中' : 'Key 未在运行环境中';
+  keyState.append(dot, keyText);
+  const models = document.createElement('p');
+  models.className = 'conn-row__line muted';
+  models.textContent = (row.modelCount === null ? '模型数未知' : row.modelCount + ' 个模型')
+    + (row.protocols && row.protocols.length ? ' · ' + row.protocols.map(protocolLabel).join('/') : '');
+  meta.append(keyState, models);
+
+  /* 行内检查只探测本行连接；结果与按钮留在同一行，不新增任何导航或诊断页。 */
+  const check = state.connChecks[row.id];
+  const checkLine = document.createElement('p');
+  checkLine.className = 'conn-row__line conn-row__check';
+  const checkDot = document.createElement('span');
+  checkDot.className = 'dot';
+  const checkText = document.createElement('span');
+  if (!check) {
+    checkDot.dataset.tone = 'neutral';
+    checkText.textContent = '尚未检查本行连接';
+  } else if (check.busy) {
+    checkDot.dataset.tone = 'warn';
+    checkText.textContent = '正在检查本行连接…';
+  } else if (check.state === 'passed') {
+    checkDot.dataset.tone = 'ok';
+    checkText.textContent = '连接可用' + (Number.isInteger(check.modelCount) ? '：' + check.modelCount + ' 个模型'
+      : '') + (Number.isFinite(check.ms) ? ' · ' + fmtMs(check.ms) : '');
+  } else {
+    checkDot.dataset.tone = 'bad';
+    checkText.textContent = '检查未通过' + (Number.isInteger(check.httpStatus) ? '（HTTP ' + check.httpStatus + '）' : '')
+      + '：' + (upstreamReasonText(check.reason) || '无法连接本行上游');
+  }
+  checkLine.append(checkDot, checkText);
+  meta.append(checkLine);
+
+  const actions = document.createElement('div');
+  actions.className = 'conn-row__actions';
+  if (!row.legacy) {
+    const checkButton = document.createElement('button');
+    checkButton.type = 'button';
+    checkButton.className = 'btn btn--quiet btn--sm';
+    checkButton.dataset.connectionCheck = row.id;
+    checkButton.disabled = Boolean(check && check.busy) || state.connsSaving;
+    checkButton.textContent = check && check.busy ? '正在检查…' : '检查连接';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'btn btn--quiet btn--sm';
+    edit.dataset.connectionEdit = row.id;
+    edit.textContent = '编辑';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn--quiet btn--sm';
+    remove.dataset.connectionRemove = row.id;
+    remove.textContent = '移除';
+    actions.append(checkButton, edit, remove);
+  } else {
+    const note = document.createElement('span');
+    note.className = 'hint hint--inline';
+    note.textContent = '旧配置仍在使用';
+    actions.append(note);
+  }
+
+  li.append(main, meta, actions);
+  return li;
+}
+
+function protocolLabel(value) {
+  return value === 'chat' ? 'Chat' : value === 'responses' ? 'Responses' : value;
+}
+
+/* 连接行内检查的失败说明：沿用 discovery 的错误码表，再补连接级拒绝。
+   result 里带回了 connectionId，只有与所在行匹配的结果才被采纳。 */
+function upstreamReasonText(code) {
+  if (typeof code !== 'string' || !code) return '';
+  return UPSTREAM_REASON[code] || DIAG_REASON[code] || code;
+}
+
+function renderConnectionEditor() {
+  const editing = state.conns.editing;
+  if (!editing) {
+    setHidden(dom.connEditor, true);
+    return;
+  }
+  setHidden(dom.connEditor, false);
+  setText(dom.connEditorTitle, editing.originalId ? '编辑连接' : '添加连接');
+  const draft = editing.draft;
+  if (dom.ceName) dom.ceName.value = draft.name || '';
+  if (dom.ceId) {
+    dom.ceId.value = draft.id || '';
+    dom.ceId.disabled = Boolean(editing.originalId);
+  }
+  if (dom.ceBase) dom.ceBase.value = draft.baseURL || '';
+  if (dom.ceKeyEnv) dom.ceKeyEnv.value = draft.apiKeyEnv || '';
+  if (dom.ceChat) dom.ceChat.checked = (draft.protocols || []).includes('chat');
+  if (dom.ceResponses) dom.ceResponses.checked = (draft.protocols || []).includes('responses');
+  if (dom.cePreset) {
+    const options = [{ value: '', label: '自定义（不套用预设）' }]
+      .concat(providerPresets().map((preset) => ({ value: preset.id, label: preset.name || preset.id })));
+    syncSelectOptions(dom.cePreset, options, draft.providerPresetId || '');
+  }
+  if (dom.cePresetHint) {
+    const preset = providerPreset(draft.providerPresetId);
+    setText(dom.cePresetHint, preset
+      ? '预设来源：' + (preset.source && preset.source.url ? preset.source.url : '未提供')
+        + (preset.notes ? ' · ' + preset.notes : '')
+      : '选择预设会填入官方地址与已知能力；仍可改为自定义地址。');
+  }
+  if (dom.ceKeyHint) {
+    setText(dom.ceKeyHint, editing.originalId
+      ? '已保存的 Key 不会显示。留空表示保持现有值。'
+      : '新连接必须填写 API Key；只写入本机私有凭据文件，不回显。');
+  }
+  if (dom.ceKey) {
+    dom.ceKey.value = '';
+    dom.ceKey.placeholder = editing.originalId ? '留空保持现有 Key' : 'sk-…';
+  }
+  if (dom.connEditorTest) dom.connEditorTest.disabled = Boolean(!editing.originalId);
+}
+
+/* 差异用「已保存 → 草稿」的成对值展示，让「改了但没重启」无法被误读成已生效。 */
+function renderConnectionsDiff() {
+  if (!dom.connsDiff) return;
+  const available = connectionsAvailable(state.data);
+  if (!available) {
+    setHidden(dom.connsDiff, true);
+    return;
+  }
+  const saved = connectionDraftFrom(state.data) || [];
+  const draft = state.conns.draft || [];
+  const savedNamed = saved.filter((row) => !row.legacy);
+  const draftNamed = draft.filter((row) => !row.legacy);
+  const lines = [];
+  const savedById = new Map(savedNamed.map((row) => [row.id, row]));
+  for (const row of draftNamed) {
+    const before = savedById.get(row.id);
+    if (!before) {
+      lines.push(['新增连接', '—', row.name + ' · ' + row.baseURL]);
+      continue;
+    }
+    if (before.name !== row.name) lines.push(['连接名称', before.name, row.name]);
+    if (before.baseURL !== row.baseURL) lines.push(['上游地址', before.baseURL, row.baseURL]);
+    if ((before.protocols || []).join(',') !== (row.protocols || []).join(',')) {
+      lines.push(['协议限制', (before.protocols || []).map(protocolLabel).join('/') || '不限',
+        (row.protocols || []).map(protocolLabel).join('/') || '不限']);
+    }
+    if (row.apiKey) lines.push(['API Key', '已保存（不回显）', '本次将替换']);
+  }
+  const draftIds = new Set(draftNamed.map((row) => row.id));
+  for (const row of savedNamed) {
+    if (!draftIds.has(row.id)) lines.push(['移除连接', row.name + ' · ' + row.baseURL, '—']);
+  }
+  const removedLegacy = saved.some((row) => row.legacy) && !draft.some((row) => row.legacy);
+  if (removedLegacy) lines.push(['旧版单上游', '仍保留', '已移除']);
+  if (!lines.length) {
+    setHidden(dom.connsDiff, true);
+    return;
+  }
+  setHidden(dom.connsDiff, false);
+  const title = document.createElement('p');
+  title.className = 'diff__title';
+  title.textContent = '待重启生效的差异（已保存 → 草稿）';
+  const list = document.createElement('dl');
+  list.className = 'diff__list';
+  lines.forEach(([label, before, after]) => {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.className = 'mono';
+    dd.textContent = (before || '—') + ' → ' + (after || '—');
+    list.append(dt, dd);
+  });
+  dom.connsDiff.replaceChildren(title, list);
+}
+
+/* ---------- render: native context policy ---------- */
+
+function renderContext() {
+  const data = state.data;
+  if (!data) return;
+  const available = contextAvailable(data);
+  setHidden(dom.ctxUnavailable, available);
+
+  const draft = state.context.draft;
+  const savedDraft = contextDraftFrom(data);
+  if (available && (!state.context.dirty || !draft)) {
+    state.context.draft = savedDraft;
+    state.context.base = contextSignature(savedDraft);
+  }
+
+  if (!available) {
+    if (dom.ctxSave) dom.ctxSave.disabled = true;
+    if (dom.ctxReset) dom.ctxReset.disabled = true;
+    setText(dom.ctxSaved, '不可用');
+    setText(dom.ctxSavedSub, '面板服务没有提供该接口。');
+    setText(dom.ctxObserved, '—');
+    setText(dom.ctxObservedSub, '无法读取原生配置观测。');
+    setDot(dom.ctxVerdictDot, 'neutral');
+    setText(dom.ctxVerdictWord, '不可用');
+    setText(dom.ctxVerdictNote, '模型、连接与翻译不受影响。');
+    if (dom.ctxModes) {
+      dom.ctxModes.querySelectorAll('input').forEach((input) => { input.disabled = true; });
+    }
+    setContextFieldsDisabled(true);
+    return;
+  }
+
+  /* 轮询不得覆盖正在编辑的字段：只有非脏状态才回填。 */
+  if (!state.context.dirty) fillContextForm();
+
+  const config = data.configuration || {};
+  const blocked = config.state === 'unavailable';
+  const dirty = contextDirty();
+  state.context.dirty = dirty;
+
+  if (dom.ctxModeInherit) dom.ctxModeInherit.checked = draft.mode === 'inherit';
+  if (dom.ctxModeCustom) dom.ctxModeCustom.checked = draft.mode === 'custom';
+  setContextFieldsDisabled(draft.mode !== 'custom' || state.contextSaving || blocked);
+
+  const { errors } = validateContextDraft(draft);
+  renderErrorList(dom.ctxErrors, errors.slice(0, 1));
+
+  if (dom.ctxSave) {
+    dom.ctxSave.disabled = !dirty || errors.length > 0 || state.contextSaving || blocked;
+    setText(dom.ctxSave, state.contextSaving ? '正在保存…' : '保存整理策略');
+  }
+  if (dom.ctxReset) dom.ctxReset.disabled = !dirty || state.contextSaving;
+  if (dom.ctxDraft) {
+    setText(dom.ctxDraft, blocked ? '配置文件不可读，无法保存策略'
+      : dirty ? '草稿尚未保存' : '草稿与已保存策略一致');
+    dom.ctxDraft.dataset.dirty = String(dirty);
+  }
+
+  const policy = (contextPolicyOf(data).policy) || {};
+  const savedText = policy.mode === 'custom'
+    ? (ratioToPercent(policy.triggerRatio) === null ? '阈值待确认' : ratioToPercent(policy.triggerRatio) + '%')
+    : '跟随原生默认';
+  setText(dom.ctxSaved, savedText);
+  setText(dom.ctxSavedSub, policy.mode === 'custom'
+    ? (Number.isSafeInteger(policy.reservedTokens) ? '预留 ' + fmtTokens(policy.reservedTokens) : '预留未提供')
+    : '未写入任何阈值。');
+
+  const observed = contextPolicyOf(data).observed;
+  if (!observed || typeof observed !== 'object') {
+    setText(dom.ctxObserved, '未观测');
+    setText(dom.ctxObservedSub, '没有从原生配置读到匹配的设置。');
+  } else {
+    const observedRatio = ratioToPercent(observed.triggerRatio);
+    setText(dom.ctxObserved, observedRatio === null ? '未观测' : observedRatio + '%');
+    setText(dom.ctxObservedSub, Number.isSafeInteger(observed.reservedTokens)
+      ? '预留 ' + fmtTokens(observed.reservedTokens) : '未观测到预留值');
+  }
+
+  const verdict = evaluateContext(data);
+  setDot(dom.ctxVerdictDot, verdict.tone);
+  setText(dom.ctxVerdictWord, verdict.word);
+  setText(dom.ctxVerdictNote, verdict.note);
+  if (dom.ctxVerdict) dom.ctxVerdict.dataset.status = verdict.status || '';
+}
+
+function setContextFieldsDisabled(disabled) {
+  [dom.ctxRatio, dom.ctxReserved].forEach((field) => {
+    if (field) field.disabled = disabled;
+  });
+}
+
+function fillContextForm() {
+  const draft = state.context.draft;
+  if (!draft) return;
+  if (dom.ctxRatio) dom.ctxRatio.value = draft.ratio;
+  if (dom.ctxReserved) dom.ctxReserved.value = draft.reserved;
+}
+
+function readContextForm() {
+  const draft = state.context.draft;
+  if (!draft) return;
+  draft.ratio = dom.ctxRatio ? dom.ctxRatio.value : draft.ratio;
+  draft.reserved = dom.ctxReserved ? dom.ctxReserved.value : draft.reserved;
+  state.context.dirty = contextDirty();
+}
+
+/* ---------- render: native MCP ---------- */
+
+function renderTools() {
+  const data = state.data;
+  if (!data) return;
+  const value = toolsState(data);
+  if (!value) {
+    setHidden(dom.toolsUnavailable, false);
+    setText(dom.toolsUnavailable, '当前面板服务没有提供 MCP 接口，此处只显示状态说明。');
+    setHidden(dom.toolsList, true);
+    setHidden(dom.toolsEmpty, true);
+    setHidden(dom.toolsEditor, true);
+    if (dom.toolsAdd) dom.toolsAdd.disabled = true;
+    if (dom.toolsRefresh) dom.toolsRefresh.disabled = true;
+    return;
+  }
+  setHidden(dom.toolsUnavailable, !(value.available === false));
+  if (value.available === false) {
+    setText(dom.toolsUnavailable, mcpReasonText(value.reason) || '原生 MCP 当前不可用。');
+  }
+  const servers = value.servers || [];
+  setHidden(dom.toolsList, servers.length === 0);
+  setHidden(dom.toolsEmpty, servers.length > 0);
+  if (dom.toolsAdd) dom.toolsAdd.disabled = value.available === false || state.tools.busy;
+  if (dom.toolsRefresh) dom.toolsRefresh.disabled = state.tools.busy;
+
+  if (dom.toolsList) {
+    const signature = JSON.stringify([servers, state.tools.busy, state.tools.result]);
+    if (dom.toolsList.dataset.signature !== signature) {
+      dom.toolsList.dataset.signature = signature;
+      dom.toolsList.replaceChildren(...servers.map(buildToolRow));
+    }
+  }
+
+  if (dom.toolsResult) {
+    const result = state.tools.result;
+    if (!result) setHidden(dom.toolsResult, true);
+    else {
+      setHidden(dom.toolsResult, false);
+      dom.toolsResult.dataset.tone = result.tone || 'neutral';
+      setText(dom.toolsResult, result.text || '');
+    }
+  }
+  renderToolsEditor();
+}
+
+function buildToolRow(server) {
+  const li = document.createElement('li');
+  li.className = 'mcp-row';
+  li.dataset.mcpName = server.name || '';
+  const transport = ['stdio', 'http', 'sse'].includes(server.transport) ? server.transport : 'unknown';
+  li.dataset.transport = transport;
+
+  const main = document.createElement('div');
+  main.className = 'mcp-row__main';
+  const title = document.createElement('p');
+  title.className = 'mcp-row__name';
+  const name = document.createElement('span');
+  name.className = 'mono';
+  name.textContent = server.name || '—';
+  const tag = document.createElement('span');
+  tag.className = 'tag';
+  tag.textContent = transport === 'unknown' ? '传输未知' : transport;
+  title.append(name, tag);
+  if (server.enabled === false) {
+    const off = document.createElement('span');
+    off.className = 'tag';
+    off.textContent = '已停用';
+    title.append(off);
+  }
+  main.append(title);
+
+  const detail = document.createElement('p');
+  detail.className = 'mcp-row__detail mono';
+  detail.textContent = toolEndpointText(server, transport);
+  main.append(detail);
+
+  const meta = document.createElement('div');
+  meta.className = 'mcp-row__meta';
+  const secrets = secretNamesText(server, transport);
+  if (secrets) {
+    const line = document.createElement('p');
+    line.className = 'mcp-row__line muted';
+    line.textContent = secrets;
+    meta.append(line);
+  }
+  const tools = Array.isArray(server.enabledTools) && server.enabledTools.length
+    ? '启用工具 ' + server.enabledTools.join(', ') : '';
+  if (tools) {
+    const line = document.createElement('p');
+    line.className = 'mcp-row__line muted';
+    line.textContent = tools;
+    meta.append(line);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'mcp-row__actions';
+  if (transport === 'unknown') {
+    const note = document.createElement('span');
+    note.className = 'hint hint--inline';
+    note.textContent = '不可编辑';
+    actions.append(note);
+  } else {
+    const test = document.createElement('button');
+    test.type = 'button';
+    test.className = 'btn btn--quiet btn--sm';
+    test.dataset.mcpTest = server.name;
+    test.textContent = '测试';
+    test.disabled = state.tools.busy;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn--quiet btn--sm';
+    remove.dataset.mcpRemove = server.name;
+    remove.textContent = '移除';
+    remove.disabled = state.tools.busy;
+    actions.append(test, remove);
+  }
+
+  li.append(main, meta, actions);
+  return li;
+}
+
+/* args 在原生列表里只给出数量，env/headers 只有名字：不把 [redacted] 当成真实值展示。 */
+function toolEndpointText(server, transport) {
+  if (transport === 'stdio') {
+    const count = Number.isInteger(server.argsCount) ? server.argsCount
+      : Array.isArray(server.args) ? server.args.length : 0;
+    return (server.command || '—') + (count ? ' · ' + count + ' 个参数' : ' · 无参数');
+  }
+  if (transport === 'http' || transport === 'sse') return server.url || '—';
+  return '原生未报告传输方式';
+}
+
+function secretNamesText(server, transport) {
+  if (transport === 'stdio' && Array.isArray(server.envNames) && server.envNames.length) {
+    return '环境变量：' + server.envNames.join(', ') + '（值不显示）';
+  }
+  if ((transport === 'http' || transport === 'sse') && Array.isArray(server.headerNames) && server.headerNames.length) {
+    return '请求头：' + server.headerNames.join(', ') + '（值不显示）';
+  }
+  return '';
+}
+
 
 function renderPendingDiff(active, saved) {
   if (!dom.pendingDiff) return;
@@ -2264,6 +4394,20 @@ function versionText(value) {
   return SEMVER_PATTERN.test(bare) ? bare : '';
 }
 
+/* 只比较 X.Y.Z 数字段：比较只服务于「本地是否不低于远端」的展示措辞，
+   下载与门槛判断仍完全由更新管理器决定。 */
+function versionOrder(left, right) {
+  const a = versionText(left);
+  const b = versionText(right);
+  if (!a || !b) return null;
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let index = 0; index < 3; index++) {
+    if (pa[index] !== pb[index]) return pa[index] < pb[index] ? -1 : 1;
+  }
+  return 0;
+}
+
 function releaseURLFor(payload) {
   const candidate = payload && typeof payload.releaseURL === 'string' ? payload.releaseURL.trim() : '';
   if (!candidate.startsWith(UPDATE_RELEASE_PREFIX)) return null;
@@ -2298,11 +4442,19 @@ function evaluateUpdate(data) {
   const pending = versionText(payload.pendingVersion);
   const reason = updateReasonText(payload.reason);
   let note = info.note;
+  let word = info.word;
+  /* 「current」只说明远端没有比本地更新的稳定版；本地版本更高时不能说
+     「当前运行的就是最新稳定版本」，要如实说「无需更新」。 */
+  const ahead = state === 'current' && current && latest && versionOrder(current, latest) > 0;
   if (state === 'failed') note = reason || info.note;
   else if (state === 'staged' && pending) note = '版本 ' + pending + ' 已下载；重启网关后才会生效，当前运行版本不变。';
   else if (state === 'available' && latest) note = '版本 ' + latest + ' 可以下载；下载后需重启网关才会生效。';
+  else if (ahead) {
+    word = '无需更新';
+    note = '本地版本 ' + current + ' 高于最新稳定版 ' + latest + '；不需要更新。';
+  }
   else if (reason && state !== 'current') note = reason;
-  return { tone: info.tone, word: info.word, note, state, current, latest, pending };
+  return { tone: info.tone, word, note, state, current, latest, pending, ahead: ahead === true };
 }
 
 function renderUpdates(data) {
@@ -2338,7 +4490,8 @@ function renderUpdates(data) {
   setText(dom.updLatest, latest || '未获取');
   const latestRaw = typeof payload.latestVersion === 'string' ? payload.latestVersion.trim() : '';
   setText(dom.updLatestSub, latest
-    ? (current && latest === current ? '与运行版本相同' : 'GitHub 上的最新正式发布')
+    ? (current && latest === current ? '与运行版本相同'
+      : verdict.ahead ? '低于本地运行版本' : 'GitHub 上的最新正式发布')
     : (latestRaw
       ? '返回的版本号格式不被接受，已忽略'
       : (verdict.state === 'checking' ? '正在读取…' : '检查后显示')));
@@ -2386,7 +4539,11 @@ function updateHint(data, verdict) {
   if (verdict.state === 'available') return '下载不会结束正在运行的会话；重启网关后才切换到新版本。';
   if (verdict.state === 'checking') return '检查只读取 GitHub 的正式发布信息，不下载安装包。';
   if (verdict.state === 'failed') return '失败不会改变正在运行的版本；可重试或到 GitHub 手动下载。';
-  if (verdict.state === 'current') return '当前已是最新稳定版本；需要时可再次检查，或回退到更早的版本。';
+  if (verdict.state === 'current') {
+    return verdict.ahead
+      ? '本地版本不低于最新稳定版；无需更新，需要时可再次检查或回退。'
+      : '当前已是最新稳定版本；需要时可再次检查，或回退到更早的版本。';
+  }
   return '检查、下载与回退都需要点击；本面板不会静默升级。';
 }
 
@@ -2423,23 +4580,6 @@ function renderUpdateButtons(data) {
 
 function renderDiagnostics(data) {
   const diagnostics = data.diagnostics || {};
-  const upstream = diagnostics.upstream;
-  if (!upstream) {
-    setDot(dom.diagUpstreamDot, 'neutral');
-    setText(dom.diagUpstreamState, '未检查');
-    setText(dom.diagUpstreamMeta, '只请求上游 GET /models，不产生推理费用。');
-  } else {
-    const passed = upstream.state === 'passed';
-    setDot(dom.diagUpstreamDot, passed ? 'ok' : 'bad');
-    setText(dom.diagUpstreamState, passed ? '通过' : '未通过');
-    const parts = [];
-    if (typeof upstream.httpStatus === 'number') parts.push('HTTP ' + upstream.httpStatus);
-    if (typeof upstream.modelCount === 'number') parts.push(fmtCount(upstream.modelCount) + ' 个模型');
-    if (typeof upstream.ms === 'number') parts.push(upstream.ms + ' ms');
-    if (upstream.reason) parts.push(reasonText(upstream.reason));
-    if (upstream.at) parts.push(fmtTime(upstream.at));
-    setText(dom.diagUpstreamMeta, parts.join(' · ') || '已检查');
-  }
 
   const compat = diagnostics.compat;
   if (!compat) {
@@ -2721,6 +4861,28 @@ function adoptState(next, { initial = false } = {}) {
     state.translation.dirty = translationKey(translationFormValues()) !== state.translation.base;
   }
 
+  /* 命名连接与上下文策略同样遵守「轮询不覆盖正在编辑的草稿」：脏草稿只更新
+     比较基线，非脏时才回填。这样后台每两秒刷新不会吞掉用户刚输的 Key。 */
+  const savedConns = savedConnectionsSignature(next);
+  if (initial || !state.conns.dirty) {
+    state.conns.base = savedConns;
+    state.conns.draft = connectionDraftFrom(next);
+    state.conns.dirty = false;
+  } else {
+    state.conns.base = savedConns;
+    state.conns.dirty = connectionsDirty();
+  }
+
+  const savedContext = contextSignature(contextDraftFrom(next));
+  if (initial || !state.context.dirty) {
+    state.context.draft = contextDraftFrom(next);
+    state.context.base = savedContext;
+    state.context.dirty = false;
+  } else {
+    state.context.base = savedContext;
+    state.context.dirty = contextDirty();
+  }
+
   settlePending(next);
 }
 
@@ -2741,6 +4903,7 @@ function renderAll() {
   renderSubagents();
   renderTranslation();
   renderConnection();
+  renderPicker();
   renderActions(state.data);
 }
 
@@ -2776,7 +4939,8 @@ function renderLoading() {
   if (dom.modelBody) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 7;
+    /* 模型表共 8 列（ID、路由、协议、预算、输出、能力、档位、操作）。 */
+    td.colSpan = 8;
     td.className = 'muted';
     td.textContent = '正在读取模型目录…';
     tr.append(td);
@@ -3076,6 +5240,7 @@ async function confirmActionResult(action, opId) {
       const latest = versionText(payload.latestVersion);
       const current = versionText(payload.currentVersion);
       if (latest && current && latest !== current) showToast('发现新版本 ' + latest + '（当前 ' + current + '）。', 'ok');
+      else if (latest && current && versionOrder(current, latest) > 0) showToast('本地版本 ' + current + ' 高于最新稳定版 ' + latest + '；无需更新。', 'ok');
       else if (latest) showToast('已是最新版本 ' + latest + '。', 'ok');
       else showToast('检查已完成，未读到可比较的稳定版本。', 'ok');
       return;
@@ -3194,6 +5359,241 @@ async function saveConnection() {
   }
 }
 
+/* 命名连接的整组替换：成功响应仍是完整 state，因此保存后立即拿到新的
+   saved 行与 restartRequired，界面无需猜测是否已经生效。 */
+async function saveConnections() {
+  const data = state.data;
+  if (!data || state.connsSaving) return;
+  const config = data.configuration || {};
+  if (config.state === 'unavailable') {
+    showToast('配置文件不可读，无法保存连接。', 'error');
+    return;
+  }
+  if (state.conns.editing) {
+    showToast('还有一条连接没有加入草稿。先点「加入草稿」或取消。', 'error');
+    return;
+  }
+  const payload = connectionPayload(state.conns.draft);
+  if (!payload.length) {
+    showToast('至少保留一条命名连接；如需退回旧配置，请先添加连接再移除旧上游。', 'error');
+    return;
+  }
+  const missingKey = payload.filter((row) => !row.apiKey);
+  if (missingKey.length) {
+    const savedIds = new Set((connectionDraftFrom(data) || []).filter((row) => row.secretSet || row.apiKeySet).map((row) => row.id));
+    const needsKey = missingKey.filter((row) => !savedIds.has(row.id));
+    if (needsKey.length) {
+      setConnErrors(['连接「' + needsKey.map((row) => row.name || row.id).join('、')
+        + '」还没有 API Key。新连接必须填写，已保存的连接可以留空保留原值。']);
+      return;
+    }
+  }
+
+  state.connsSaving = true;
+  renderConnections();
+  renderActions(data);
+
+  try {
+    const tokenEnv = connectionSource(data) ? connectionSource(data).tokenEnv : undefined;
+    const body = { revision: data.revision, connections: payload };
+    if (typeof tokenEnv === 'string' && tokenEnv) body.tokenEnv = tokenEnv;
+    const res = await request(API.connections, { method: 'POST', body });
+    if (res && res.state) {
+      state.connsSaving = false;
+      adoptState(res.state);
+      state.lastSync = Date.now();
+      state.conns.base = savedConnectionsSignature(state.data);
+      state.conns.draft = connectionDraftFrom(state.data);
+      renderAll();
+      showToast('连接已保存。需要重启面板后才会使用新的连接与密钥。', 'ok');
+    } else {
+      state.connsSaving = false;
+      await loadState({ silent: true });
+      showToast('连接已提交，状态已刷新。', 'ok');
+    }
+  } catch (error) {
+    state.connsSaving = false;
+    if (error.code === 'credentials_file_unavailable') {
+      /* 只有写入私有凭据文件才需要它；这条错误不能当成「已保存」，
+         也不能把用户输入的 Key 打到日志或提示里。 */
+      setConnErrors(['当前启动方式没有可写的私有凭据文件，因此没有保存任何 API Key。'
+        + '请用 setup 生成的凭据文件启动面板后重试；已填写的 Key 不会被记录。']);
+      if (dom.ceKey) dom.ceKey.value = '';
+      showToast('无法保存 API Key：当前没有可写的私有凭据文件。', 'error');
+      renderConnections();
+      return;
+    }
+    if (error.code === 'connection_in_use') {
+      setConnErrors(['仍有模型引用被移除的连接：' + (Array.isArray(error.models) ? error.models.join('、') : '')
+        + '。请先在模型管理改到其他连接，再移除该连接。']);
+      showToast('连接仍被模型引用，未保存。', 'error');
+      renderConnections();
+      return;
+    }
+    await handleSaveFailure(error, 'connections');
+  } finally {
+    state.connsSaving = false;
+    if (state.data) {
+      renderConnections();
+      renderActions(state.data);
+    }
+  }
+}
+
+async function saveContextPolicy() {
+  const data = state.data;
+  if (!data || state.contextSaving) return;
+  if (!contextAvailable(data)) return;
+  const draft = state.context.draft;
+  const { errors, value } = validateContextDraft(draft);
+  renderErrorList(dom.ctxErrors, errors);
+  if (errors.length) return;
+
+  state.contextSaving = true;
+  renderContext();
+  renderActions(data);
+
+  try {
+    const res = await request(API.context, { method: 'POST', body: { policy: value } });
+    /* 契约固定为 {context}：只解析这一种形状，缺字段时如实报错而不是猜测。 */
+    const context = res && res.context;
+    if (context && typeof context === 'object' && context.policy) {
+      if (state.data) state.data = { ...state.data, context };
+      state.contextSaving = false;
+      const next = contextDraftFrom(state.data);
+      state.context.draft = next;
+      state.context.base = contextSignature(next);
+      state.context.dirty = false;
+      renderContext();
+      renderOverview(state.data);
+      const status = evaluateContext(state.data);
+      showToast(status.status === 'applied'
+        ? '策略已写入 Kimi 原生配置；正在运行的会话不会中途改变，需新会话读取后生效。'
+        : '策略已保存：' + status.word + '。', status.status === 'applied' ? 'ok' : 'error');
+      return;
+    }
+    state.contextSaving = false;
+    await loadState({ silent: true });
+    showToast('策略已提交，状态已刷新。', 'ok');
+  } catch (error) {
+    state.contextSaving = false;
+    if (error.status === 400) {
+      renderErrorList(dom.ctxErrors, [error.message]);
+      renderContext();
+      return;
+    }
+    await handleSaveFailure(error, 'context');
+  } finally {
+    state.contextSaving = false;
+    if (state.data) {
+      renderContext();
+      renderActions(state.data);
+    }
+  }
+}
+
+async function refreshTools({ silent = false } = {}) {
+  const data = state.data;
+  if (!data || state.tools.busy) return;
+  state.tools.busy = true;
+  renderTools();
+  try {
+    const res = await request(API.tools);
+    if (res && Array.isArray(res.servers)) {
+      state.data = { ...state.data, tools: res };
+      state.tools.servers = res.servers;
+      if (!silent) showToast('已重新读取原生 MCP 列表。', 'ok');
+    }
+  } catch (error) {
+    if (!silent) showToast(error.message || '读取原生 MCP 失败。', 'error');
+  } finally {
+    state.tools.busy = false;
+    if (state.data) {
+      renderTools();
+      renderOverview(state.data);
+    }
+  }
+}
+
+/* 固定 ops：add/update/remove/test。响应是 {tools, result}，state 只在 list 读，
+   因此每次写操作后用返回的 tools 直接刷新，不额外发一次 list。 */
+async function submitTools(body, { successMessage } = {}) {
+  const data = state.data;
+  if (!data || state.tools.busy) return null;
+  state.tools.busy = true;
+  state.tools.result = null;
+  renderTools();
+  renderToolsEditor();
+  try {
+    const res = await request(API.tools, { method: 'POST', body });
+    if (res && res.tools && Array.isArray(res.tools.servers)) {
+      state.data = { ...state.data, tools: res.tools };
+      state.tools.servers = res.tools.servers;
+    }
+    const result = res && res.result;
+    if (result) {
+      /* timeout 与 busy 都不是失败：前者结果未知，后者表示上一次探测还没结束。
+         两者都不自动重试，交由用户显式再点，后端 busy 兜底。 */
+      const tone = result.ok === true ? 'ok'
+        : ['absent', 'unchanged', 'busy', 'timeout'].includes(result.state) ? 'warn' : 'error';
+      state.tools.result = { tone, text: toolsResultText(result) };
+    }
+    if (result && result.ok === true && successMessage) showToast(successMessage, 'ok');
+    if (result && result.ok !== true && result.state !== 'busy') showToast(toolsResultText(result), 'error');
+    return result || null;
+  } catch (error) {
+    showToast(error.message || '原生 MCP 操作未完成。', 'error');
+    return null;
+  } finally {
+    state.tools.busy = false;
+    if (state.data) {
+      renderTools();
+      renderOverview(state.data);
+    }
+  }
+}
+
+/* 结果文案只依据 state + reason + tools/summary。
+   后端原始 detail 是内核输出，脱敏只是尽力而为，因此界面不展示它——
+   这既符合「不需要诊断中心」，也避免把未净化的文本带进页面。 */
+function toolsResultText(result) {
+  if (!result || typeof result !== 'object') return '操作未完成。';
+  const state = typeof result.state === 'string' ? result.state : '';
+  const name = typeof result.name === 'string' ? result.name : '';
+  const reason = typeof result.reason === 'string' ? result.reason : '';
+  const toolCount = result.summary && Number.isInteger(result.summary.toolCount)
+    ? result.summary.toolCount
+    : Array.isArray(result.tools) ? result.tools.length : null;
+  const declared = result.summary && Number.isInteger(result.summary.declaredToolCount)
+    ? result.summary.declaredToolCount : null;
+
+  if (state === 'connected') {
+    if (toolCount === null) return '已连接 ' + name + '。';
+    /* 声明数与解析数不一致说明内核输出被截断或异常，此时不能报「完整」。 */
+    const truncated = declared !== null && declared !== toolCount;
+    return '已连接 ' + name + '，解析到 ' + toolCount + ' 个工具'
+      + (truncated ? '（内核声明 ' + declared + ' 个，输出可能被截断）。' : '。');
+  }
+  if (state === 'failed') {
+    return mcpReasonText(reason) || '测试未通过：服务器没有按 MCP 协议正常回应。';
+  }
+  if (state === 'timeout') return '测试超时：结果未知，服务器可能稍后才就绪。可稍后再测试一次。';
+  if (state === 'busy') return '上一次测试尚未结束；这不是失败，请稍后显式再试。';
+  if (state === 'not_found') return '找不到服务器：' + name + '。';
+  if (state === 'added') return '已添加 ' + name + '。';
+  if (state === 'updated') return '已更新 ' + name + '。';
+  if (state === 'unchanged') return name ? name + ' 没有变化。' : '没有变化。';
+  if (state === 'removed') return '已移除 ' + name + '。';
+  if (state === 'absent') return name + ' 不在原生配置中。';
+  if (state === 'exists') return '同名服务器已存在：' + name + '。';
+  if (state === 'invalid') {
+    return '设置不被接受'
+      + (typeof result.field === 'string' ? '（字段 ' + result.field + '）' : '') + '。';
+  }
+  if (state === 'unavailable') return mcpReasonText(reason) || '原生 MCP 当前不可用。';
+  return mcpReasonText(reason) || '操作未完成。';
+}
+
 async function saveSubagentTarget() {
   const data = state.data;
   if (!data || state.subagentSaving || !state.draft) return;
@@ -3277,7 +5677,12 @@ async function saveTranslation() {
   renderActions(data);
 
   try {
-    const res = await request(API.translation, { method: 'POST', body: { revision: data.revision, ...built.value } });
+    /* 双锁：revision 是 gateway.json 整体修订（历史行为），translationRevision
+       是翻译设置自己的修订，服务端会把它作为 CAS 令牌下传给运行时写入。 */
+    const translation = state.data.translation || {};
+    const payload = { revision: data.revision, ...built.value };
+    if (typeof translation.revision === 'string') payload.translationRevision = translation.revision;
+    const res = await request(API.translation, { method: 'POST', body: payload });
     if (res && res.state) {
       state.translationSaving = false;
       adoptState(res.state);
@@ -3295,6 +5700,12 @@ async function saveTranslation() {
     return true;
   } catch (error) {
     state.translationSaving = false;
+    if (error.status === 409 && error.code === 'translation_settings_conflict') {
+      /* 陈旧的翻译修订：状态已刷新，保留用户的编辑，让用户确认后重存。 */
+      await loadState({ silent: true });
+      showToast('翻译设置已在别处被修改，已刷新状态；你的编辑仍然保留，请确认后重新保存。', 'error');
+      return false;
+    }
     await handleSaveFailure(error, 'translation');
     return false;
   } finally {
@@ -3690,6 +6101,196 @@ function bindEvents() {
   });
   if (dom.connSave) dom.connSave.addEventListener('click', saveConnection);
 
+  /* 命名连接 */
+  if (dom.connsAdd) dom.connsAdd.addEventListener('click', () => openConnectionEditor(null));
+  if (dom.connsReset) dom.connsReset.addEventListener('click', () => {
+    state.conns.draft = connectionDraftFrom(state.data);
+    state.conns.base = savedConnectionsSignature(state.data);
+    state.conns.editing = null;
+    renderConnections();
+  });
+  if (dom.connsSave) dom.connsSave.addEventListener('click', saveConnections);
+  if (dom.connsList) dom.connsList.addEventListener('click', (event) => {
+    const node = event.target && event.target.closest ? event.target.closest('button') : null;
+    if (!node) return;
+    if (node.dataset.connectionCheck) {
+      void runConnectionCheck(node.dataset.connectionCheck);
+      return;
+    }
+    if (node.dataset.connectionEdit) {
+      const row = (state.conns.draft || []).find((entry) => entry.id === node.dataset.connectionEdit);
+      if (row) openConnectionEditor(row);
+      return;
+    }
+    if (node.dataset.connectionRemove) {
+      const id = node.dataset.connectionRemove;
+      const used = ((state.data && state.data.models) || []).filter((model) => model.connectionId === id);
+      if (used.length) {
+        setConnErrors(['仍有 ' + used.length + ' 个模型使用该连接（'
+          + used.slice(0, 3).map((model) => model.id).join('、') + (used.length > 3 ? ' 等' : '')
+          + '）。请先在模型管理改到其他连接，再移除。']);
+        return;
+      }
+      state.conns.draft = (state.conns.draft || []).filter((entry) => entry.id !== id);
+      if (state.conns.editing && state.conns.editing.originalId === id) state.conns.editing = null;
+      setConnErrors([]);
+      renderConnections();
+    }
+  });
+  if (dom.connEditorClose) dom.connEditorClose.addEventListener('click', closeConnectionEditor);
+  if (dom.connEditorCancel) dom.connEditorCancel.addEventListener('click', closeConnectionEditor);
+  if (dom.connEditorApply) dom.connEditorApply.addEventListener('click', applyConnectionEditor);
+  if (dom.connEditorTest) dom.connEditorTest.addEventListener('click', async () => {
+    const editing = state.conns.editing;
+    if (!editing || !editing.originalId) return;
+    const discovery = await runDiscovery(editing.originalId);
+    if (discovery && discovery.state === 'passed') {
+      showToast('连接可达，读到 ' + discovery.modelCount + ' 个模型；已保存的凭据未改变。', 'ok');
+    }
+  });
+  if (dom.cePreset) dom.cePreset.addEventListener('change', () => {
+    if (!state.conns.editing) return;
+    applyProviderPreset(dom.cePreset.value);
+  });
+  [dom.ceName, dom.ceId, dom.ceBase, dom.ceKey, dom.ceKeyEnv].forEach((field) => {
+    if (!field) return;
+    field.addEventListener('input', () => {
+      if (!state.conns.editing) return;
+      readConnectionEditor();
+      if (state.conns.editing.errors && state.conns.editing.errors.length) {
+        state.conns.editing.errors = [];
+        setConnErrors([]);
+      }
+    });
+  });
+  [dom.ceChat, dom.ceResponses].forEach((field) => {
+    if (!field) return;
+    field.addEventListener('change', () => {
+      if (!state.conns.editing) return;
+      readConnectionEditor();
+    });
+  });
+
+  /* 上下文策略 */
+  [dom.ctxModeInherit, dom.ctxModeCustom].forEach((field) => {
+    if (!field) return;
+    field.addEventListener('change', () => {
+      const draft = state.context.draft;
+      if (!draft || !contextAvailable(state.data)) return;
+      draft.mode = dom.ctxModeCustom && dom.ctxModeCustom.checked ? 'custom' : 'inherit';
+      if (draft.mode === 'custom') {
+        if (!draft.ratio) draft.ratio = '75';
+        if (draft.reserved === '') draft.reserved = '0';
+      }
+      state.context.dirty = contextDirty();
+      fillContextForm();
+      renderContext();
+    });
+  });
+  [dom.ctxRatio, dom.ctxReserved].forEach((field) => {
+    if (!field) return;
+    field.addEventListener('input', () => {
+      readContextForm();
+      renderErrorList(dom.ctxErrors, []);
+      renderContext();
+    });
+  });
+  if (dom.ctxReset) dom.ctxReset.addEventListener('click', () => {
+    state.context.draft = contextDraftFrom(state.data);
+    state.context.base = contextSignature(state.context.draft);
+    state.context.dirty = false;
+    fillContextForm();
+    renderErrorList(dom.ctxErrors, []);
+    renderContext();
+  });
+  if (dom.ctxSave) dom.ctxSave.addEventListener('click', saveContextPolicy);
+
+  /* MCP 工具 */
+  if (dom.toolsAdd) dom.toolsAdd.addEventListener('click', openToolsEditor);
+  if (dom.toolsRefresh) dom.toolsRefresh.addEventListener('click', () => { void refreshTools(); });
+  if (dom.toolsEditorClose) dom.toolsEditorClose.addEventListener('click', closeToolsEditor);
+  if (dom.teCancel) dom.teCancel.addEventListener('click', closeToolsEditor);
+  if (dom.teSave) dom.teSave.addEventListener('click', submitToolsEditor);
+  if (dom.teTransport) dom.teTransport.addEventListener('change', renderToolsEditor);
+  if (dom.toolsList) dom.toolsList.addEventListener('click', (event) => {
+    const node = event.target && event.target.closest ? event.target.closest('button') : null;
+    if (!node) return;
+    if (node.dataset.mcpTest) {
+      /* 请求期间按钮由 renderTools 的 busy 状态禁用；结束后不做自动重试，
+         timeout/busy 由用户显式再点。 */
+      const name = node.dataset.mcpTest;
+      showToast('正在测试 ' + name + '；这是唯一会启动服务器的操作。', 'ok');
+      void submitTools({ action: 'test', name });
+      return;
+    }
+    if (node.dataset.mcpRemove) {
+      const name = node.dataset.mcpRemove;
+      void submitTools({ action: 'remove', name }, { successMessage: '已从 Kimi 原生 MCP 配置移除。' });
+    }
+  });
+
+  /* 候选选择器 */
+  if (dom.mCandidates) dom.mCandidates.addEventListener('click', openPicker);
+  if (dom.pickerClose) dom.pickerClose.addEventListener('click', closePicker);
+  if (dom.pickerQ) dom.pickerQ.addEventListener('input', () => {
+    state.picker.query = dom.pickerQ.value;
+    renderPicker();
+    scheduleSearch();
+  });
+  if (dom.pickerScan) dom.pickerScan.addEventListener('click', () => {
+    const editor = state.editor;
+    if (!editor) return;
+    void runDiscovery(editor.draft.connectionId);
+  });
+  if (dom.pickerList) dom.pickerList.addEventListener('click', (event) => {
+    const node = event.target && event.target.closest ? event.target.closest('[data-candidate-id]') : null;
+    if (!node) return;
+    pickCandidate(node.dataset.candidateId);
+  });
+  if (dom.mConnection) dom.mConnection.addEventListener('change', () => {
+    const editor = state.editor;
+    if (!editor) return;
+    editor.draft.connectionId = dom.mConnection.value;
+    editor.draft.metadataSource = null;
+    if (editor.draft.upstreamModelId) {
+      editor.draft.id = routeIdFor(editor.draft.connectionId, editor.draft.upstreamModelId);
+      if (dom.mId) dom.mId.value = editor.draft.id;
+    }
+    state.picker.models = null;
+    state.picker.reason = null;
+    state.picker.state = null;
+    state.picker.checkedAt = null;
+    state.picker.source = null;
+    state.picker.scope = pickerScope();
+    renderEditor();
+    renderPicker();
+    /* A saved connection already has a catalog, so changing the connection with
+       the picker open reloads it instead of leaving an empty list. */
+    if (state.picker.open) void searchCandidates(state.picker.query);
+  });
+  if (dom.mUpstream) dom.mUpstream.addEventListener('input', () => {
+    const editor = state.editor;
+    if (!editor) return;
+    editor.draft.upstreamModelId = dom.mUpstream.value;
+    editor.draft.metadataSource = null;
+    const suggested = routeIdFor(editor.draft.connectionId, editor.draft.upstreamModelId);
+    if (suggested) {
+      editor.draft.id = suggested;
+      if (dom.mId) dom.mId.value = suggested;
+    }
+    renderEditor();
+  });
+  if (dom.mBudgetGroup) dom.mBudgetGroup.addEventListener('click', (event) => {
+    const button = event.target && event.target.closest ? event.target.closest('[data-budget]') : null;
+    if (!button || button.disabled) return;
+    applyBudgetPreset(button.dataset.budget);
+  });
+  if (dom.mProtocolGroup) dom.mProtocolGroup.addEventListener('click', (event) => {
+    const button = event.target && event.target.closest ? event.target.closest('[data-protocol]') : null;
+    if (!button || button.disabled) return;
+    chooseProtocol(button.dataset.protocol);
+  });
+
   /* 思考翻译 */
   if (dom.trForm) {
     const onEdit = () => {
@@ -3765,6 +6366,14 @@ function adoptLocationKey() {
   state.conn.dirty = false;
   state.translation.base = null;
   state.translation.dirty = false;
+  /* 新会话属于另一份配置：旧草稿与已读候选必须丢弃，否则会把上一会话的
+     连接、Key 或上下文设置带进这一份。 */
+  state.conns = { base: null, dirty: false, editing: null, draft: null, errors: [] };
+  state.context = { base: null, dirty: false };
+  state.tools = { servers: null, available: false, reason: null, editing: false, result: null, busy: false };
+  state.picker = { open: false, models: null, query: '', state: null, checkedAt: null, source: null, reason: null,
+    busy: false, seq: 0, hint: null, scope: null };
+  state.providers = null;
   modelSignature = '';
   recentSignature = '';
   saModelSignature = '';
@@ -3774,12 +6383,28 @@ function adoptLocationKey() {
   dom.toast.hidden = true;
   dom.shell.hidden = true;
   showGate('checking');
+  void loadProviders();
   loadState().then((ok) => {
     if (ok) startPolling();
   });
   return true;}
 
 /* ---------- boot ---------- */
+
+/* 供应商预设只读取一次，用于连接编辑器与首设页的引导。
+   接口不可用时留空数组：表单退回纯手填，不阻塞其它功能。 */
+async function loadProviders() {
+  if (!state.key || state.providers) return;
+  try {
+    const res = await request(API.providers);
+    if (res && Array.isArray(res.presets)) {
+      state.providers = res;
+      renderConnectionEditor();
+    }
+  } catch {
+    state.providers = { presets: [] };
+  }
+}
 
 function boot() {
   initTheme();
@@ -3800,6 +6425,7 @@ function boot() {
     return;
   }
 
+  void loadProviders();
   showGate('checking');
   loadState().then((ok) => {
     if (!ok) return;

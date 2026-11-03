@@ -633,3 +633,58 @@ test('start reloads a loaded job whose supervised runner has exited', () => {
   expect(w.service.start().state).toBe('started');
   expect(w.calls.slice(before).map(call => call.args[0])).toEqual(['print', 'bootstrap', 'kickstart']);
 }, 20000);
+
+// A connections-only configuration has no legacy `upstream` block. The service
+// must still install from the private credentials file alone, and it must
+// refuse a file that cannot supply a key some model actually routes through.
+test('a connections-only setup installs from private credentials and refuses a missing connection key', () => {
+  const w = workspace({ seed: false });
+  const { config, connectionApiKeys } = normalizeSetupInput({
+    connections: [
+      { id: 'conn-a', name: 'Provider A', baseURL: 'https://a.example/v1', apiKey: KEY },
+      { id: 'conn-b', name: 'Provider B', baseURL: 'https://b.example/v1', apiKey: 'conn-b-key' },
+    ],
+    models: [{ id: 'deepseek-v4-1-flash', protocol: 'responses', contextWindow: 131072,
+      connectionId: 'conn-a', upstreamModelId: 'deepseek-chat' }],
+    port: 3426, dns: false,
+  });
+  const saved = saveSetup({ paths: w.paths, config, connectionApiKeys });
+  expect(saved.config.upstream).toBeUndefined();
+  // A background start has no shell environment; only the private file counts.
+  expect(w.service.preflight()).toEqual({ models: 1 });
+  const installed = w.service.install();
+  expect(installed.state).toBe('installed');
+  // Neither key nor the token reached the definition or the service record.
+  const plist = fs.readFileSync(installed.definition, 'utf8');
+  const record = fs.readFileSync(path.join(w.stateDir, 'service.json'), 'utf8');
+  for (const secret of [KEY, 'conn-b-key', saved.credentials.gatewayToken]) {
+    expect(plist).not.toContain(secret);
+    expect(record).not.toContain(secret);
+  }
+  // The connection a model uses is required; the unused one is not.
+  const credentials = JSON.parse(fs.readFileSync(w.paths.credentials, 'utf8'));
+  delete credentials.connectionApiKeys['conn-a'];
+  fs.writeFileSync(w.paths.credentials, JSON.stringify(credentials), { mode: 0o600 });
+  expect(() => w.service.preflight()).toThrow('service_credentials_missing');
+  credentials.connectionApiKeys['conn-a'] = KEY;
+  delete credentials.connectionApiKeys['conn-b'];
+  fs.writeFileSync(w.paths.credentials, JSON.stringify(credentials), { mode: 0o600 });
+  expect(w.service.preflight()).toEqual({ models: 1 });
+});
+
+test('a legacy setup keeps its exact credential rules, including the stored variable name', () => {
+  // The private file stores the legacy key under one name; a config that names
+  // another one cannot be started from it and is still refused.
+  const w = workspace();
+  const credentials = JSON.parse(fs.readFileSync(w.paths.credentials, 'utf8'));
+  const document = JSON.parse(fs.readFileSync(w.paths.config, 'utf8'));
+  fs.writeFileSync(w.paths.config, JSON.stringify({ ...document,
+    upstream: { ...document.upstream, apiKeyEnv: 'CUSTOM_UPSTREAM_KEY' } }), { mode: 0o600 });
+  expect(() => w.service.preflight()).toThrow('service_credentials_name_mismatch');
+  fs.writeFileSync(w.paths.config, JSON.stringify(document), { mode: 0o600 });
+  expect(w.service.preflight()).toEqual({ models: 1 });
+  // A legacy file without the legacy key is still incomplete.
+  delete credentials.upstreamApiKey;
+  fs.writeFileSync(w.paths.credentials, JSON.stringify(credentials), { mode: 0o600 });
+  expect(() => w.service.preflight()).toThrow('service_credentials_missing');
+});

@@ -108,7 +108,8 @@ function clock() {
   };
 }
 
-function page({ hash = '', state = null, saved = null, states = [], timer = clock() } = {}) {
+function page({ hash = '', state = null, saved = null, states = [], timer = clock(),
+  providers = { presets: [] }, providersStatus = 200 } = {}) {
   const nodes = new Map();
   const requests = [];
   const stored = new Map();
@@ -132,6 +133,7 @@ function page({ hash = '', state = null, saved = null, states = [], timer = cloc
   const fetch = async (pathname, init = {}) => {
     requests.push({ pathname, method: init.method || 'GET', headers: init.headers || {},
       body: init.body ? JSON.parse(init.body) : undefined });
+    if (pathname === '/api/providers') return respond(providersStatus, providers);
     if (pathname === '/api/state') {
       // The page's own load happens before any save; `states` describes only
       // the reads that follow, which is what a polling page asks for.
@@ -188,8 +190,11 @@ test('a page load without a key never calls the API and disables saving', async 
 test('the session key is taken from the fragment, stored once and removed from the URL', async () => {
   const pageState = page({ hash: '#key=abc123' });
   await flush();
-  expect(pageState.requests[0].pathname).toBe('/api/state');
-  expect(pageState.requests[0].headers.Authorization).toBe('Bearer abc123');
+  // The page now loads the provider list and the saved state in parallel, so
+  // the first request is whichever was issued first; both must be authenticated.
+  expect(pageState.requests.map((entry) => entry.pathname).sort())
+    .toEqual(['/api/providers', '/api/state']);
+  expect(pageState.requests.every((entry) => entry.headers.Authorization === 'Bearer abc123')).toBe(true);
   expect(pageState.stored.get('kimi-work-gateway.setup.key')).toBe('abc123');
   expect(pageState.location.hash).toBe('');
   // A reload without the fragment still resumes the same session.
@@ -206,6 +211,7 @@ test('a save sends one bounded payload with no capability it was not told', asyn
   await flush();
   const form = pageState.get('form');
   pageState.get('baseURL').value = 'https://api.example.com/v1';
+  pageState.get('connId').value = 'main';
   pageState.get('apiKey').value = 'sk-page-test';
   pageState.get('port').value = '3426';
   pageState.get('installService').checked = true;
@@ -219,11 +225,16 @@ test('a save sends one bounded payload with no capability it was not told', asyn
   const save = pageState.requests.find(entry => entry.pathname === '/api/save');
   expect(save.method).toBe('POST');
   expect(save.headers.Origin).toBe('http://127.0.0.1:1');
-  expect(save.body.baseURL).toBe('https://api.example.com/v1');
-  expect(save.body.apiKey).toBe('sk-page-test');
+  // New flow: one named connection carrying its own key; no legacy top-level pair.
+  expect(save.body.connections).toEqual([{ id: 'main', name: 'main',
+    baseURL: 'https://api.example.com/v1', apiKey: 'sk-page-test' }]);
+  expect(save.body).not.toHaveProperty('baseURL');
+  expect(save.body).not.toHaveProperty('apiKey');
   expect(save.body.installService).toBe(true);
-  expect(save.body.models).toEqual([{ id: 'deepseek-v4-1-flash', protocol: 'responses', contextWindow: 131072,
-    tools: true, reasoning: false, inputModalities: ['text'] }]);
+  // The model must name its connection: an `upstreamModelId` with no owner is
+  // refused by the config reader, because nothing says where to send it.
+  expect(save.body.models).toEqual([{ id: 'deepseek-v4-1-flash', protocol: 'responses', connectionId: 'main',
+    contextWindow: 131072, tools: true, reasoning: false, inputModalities: ['text'] }]);
   // The key field is cleared after a successful save and never echoed back.
   expect(pageState.get('apiKey').value).toBe('');
   expect(pageState.get('done-card').hidden).toBe(false);
@@ -235,6 +246,7 @@ test('the page refuses to submit without a protocol or without a key', async () 
   await flush();
   const form = pageState.get('form');
   pageState.get('baseURL').value = 'https://api.example.com/v1';
+  pageState.get('connId').value = 'main';
   const model = pageState.get('models').children[0];
   find(model, '[data-f="id"]').value = 'some-model';
   find(model, '[data-f="contextWindow"]').value = '1000';
@@ -261,6 +273,7 @@ test('a rejected save shows the mapped message and stays editable', async () => 
     return { ok: true, status: 200, json: async () => ({ ok: true, state: { configured: false, models: [] } }) };
   };
   pageState.get('baseURL').value = 'https://api.example.com/v1';
+  pageState.get('connId').value = 'main';
   pageState.get('apiKey').value = 'sk-page-test';
   const model = pageState.get('models').children[0];
   find(model, '[data-f="id"]').value = 'kimi-x';
@@ -268,7 +281,8 @@ test('a rejected save shows the mapped message and stays editable', async () => 
   find(model, '[data-f="contextWindow"]').value = '1000';
   await pageState.get('form').listeners.get('submit')({ preventDefault() {} });
   await flush();
-  expect(pageState.get('msg').innerHTMLSource).toContain('kimi- 开头时必须使用 Chat Completions');
+  // The page explains the mismatch in its own words before the server sees it.
+  expect(pageState.get('msg').innerHTMLSource).toContain('需要 Chat Completions 协议');
   expect(pageState.get('save').disabled).toBe(false);
 }, 20000);
 
@@ -286,6 +300,37 @@ test('the id field states which protocol Kimi will use', async () => {
   expect(hint.textContent).toContain('Responses');
 }, 20000);
 
+// The upstream id is opaque to the gateway: only the local route id decides
+// which endpoint Kimi calls. A preset model like `kimi-for-coding` is served
+// over Responses under a `resp-` route, so reading the upstream id would
+// contradict the route the user actually saved.
+test('the protocol hint follows the route id and ignores the upstream id', async () => {
+  const pageState = page({ hash: '#key=abc123' });
+  await flush();
+  const model = pageState.get('models').children[0];
+  const id = find(model, '[data-f="id"]');
+  const upstream = find(model, '[data-f="upstream"]');
+  const hint = find(model, '[data-derived]');
+
+  // A `kimi-`-looking upstream under a Responses route must say Responses.
+  id.value = 'kimi-code-cn/resp-kimi-for-coding';
+  upstream.value = 'kimi-for-coding';
+  id.listeners.get('input')();
+  expect(hint.textContent).toContain('Responses');
+  expect(hint.textContent).not.toContain('Chat Completions');
+
+  // Changing only the upstream id cannot move the hint: the route did not change.
+  upstream.value = 'some-other-upstream';
+  upstream.listeners.get('input')?.();
+  expect(hint.textContent).toContain('Responses');
+
+  // And the converse: a Chat route with a non-`kimi-` upstream still says Chat.
+  id.value = 'kimi-code-cn/kimi-gpt-6-astra';
+  id.listeners.get('input')();
+  expect(hint.textContent).toContain('Chat Completions');
+  expect(hint.textContent).not.toContain('Responses 协议');
+});
+
 test('a ready panel becomes a real link and is opened once', async () => {
   const opened = [];
   const pageState = page({ hash: '#key=abc123', saved: { ok: true,
@@ -298,6 +343,7 @@ test('a ready panel becomes a real link and is opened once', async () => {
   pageState.window.open = (url, target, features) => { opened.push({ url, target, features }); return null; };
   await flush();
   pageState.get('baseURL').value = 'https://api.example.com/v1';
+  pageState.get('connId').value = 'main';
   pageState.get('apiKey').value = 'sk-page-test';
   const model = pageState.get('models').children[0];
   find(model, '[data-f="id"]').value = 'm';
@@ -326,6 +372,7 @@ test('a waiting or manual panel shows a retry hint instead of a link', async () 
       gateway: { baseURL: 'https://api.example.com/v1', port: 3426 } } });
     await flush();
     pageState.get('baseURL').value = 'https://api.example.com/v1';
+    pageState.get('connId').value = 'main';
     pageState.get('apiKey').value = 'sk-page-test';
     const model = pageState.get('models').children[0];
     find(model, '[data-f="id"]').value = 'm';
@@ -346,18 +393,19 @@ const SAVED_STATE = { configured: true, baseURL: 'https://api.example.com/v1', p
   tokenSet: true, models: [{ id: 'm', protocol: 'responses', contextWindow: 1000 }],
   configuration: { file: '/state/gateway.json' }, credentials: { file: '/state/credentials.json' } };
 
-function panelResult(panel, service) {
-  return { ok: true, changed: false, state: SAVED_STATE, service, panel,
+function panelResult(panel, service, state = SAVED_STATE) {
+  return { ok: true, changed: false, state, service, panel,
     gateway: { baseURL: 'https://api.example.com/v1', port: 3426 } };
 }
 
 // Fills the form the way a user would and submits it once.
 async function submit(pageState) {
+  pageState.get('connId').value = 'main';
   pageState.get('baseURL').value = 'https://api.example.com/v1';
   pageState.get('apiKey').value = 'sk-page-test';
   pageState.get('installService').checked = true;
   const model = pageState.get('models').children[0];
-  find(model, '[data-f="id"]').value = 'm';
+  find(model, '[data-f="id"]').value = 'main/resp-m';
   find(model, '[data-f="protocol"]').value = 'responses';
   find(model, '[data-f="contextWindow"]').value = '1000';
   await pageState.get('form').listeners.get('submit')({ preventDefault() {} });
@@ -459,3 +507,220 @@ test('polling stops on an expired session and never retries a refused page', asy
   expect(pageState.timer.pending).toHaveLength(0);
   expect(pageState.get('panel-waiting').hidden).toBe(false);
 }, 20000);
+
+// A candidate's provenance belongs to the number it describes. The page may only
+// carry that provenance back while the budget still holds the candidate's own
+// figure: once the user types a different budget, the source is their own.
+test('a saved candidate keeps its budget provenance only while the number is unchanged', async () => {
+  const origin = { kind: 'discovery', url: 'https://api.example.com/v1/models', checkedAt: '2026-11-02T10:00:00Z' };
+  const entryURL = 'http://127.0.0.1:3429/#key=' + 'd'.repeat(64);
+  // Loading the preset catalog needs a selected provider, which is the real
+  // first-run path; a bare custom address has nothing to load from.
+  const pageState = page({ hash: '#key=abc123',
+    providers: { presets: [{ id: 'kimi-code-cn', name: 'Kimi Code（国内）',
+      baseURL: 'https://api.kimi.com/coding/v1', protocols: ['chat', 'responses'], models: [] }] } });
+  await flush();
+  pageState.get('preset').value = 'kimi-code-cn';
+
+  // The search row is what `/api/model-search` really returns for a preset-only
+  // connection; `loadPresetModels` turns each candidate into a form row.
+  pageState.context.fetch = async (pathname, init = {}) => {
+    const respond = (status, body) => ({ ok: status < 400, status, json: async () => body });
+    pageState.requests.push({ pathname, method: init.method || 'GET', headers: init.headers || {},
+      body: init.body ? JSON.parse(init.body) : undefined });
+    if (pathname === '/api/providers') return respond(200, { presets: [] });
+    if (pathname === '/api/state') return respond(200, { ok: true, state: SAVED_STATE, service: null, panel: null });
+    if (pathname === '/api/model-search') {
+      return respond(200, { ok: true, query: '', models: [{ id: 'k3', contextWindow: 262144,
+        protocols: ['chat', 'responses'], metadataSource: origin, tools: true }] });
+    }
+    // A real save answers with the saved state, which the page then renders back
+    // into the form; the row must survive that round trip with its provenance.
+    const payload = init.body ? JSON.parse(init.body) : null;
+    return respond(200, panelResult({ state: 'ready', url: 'http://127.0.0.1:3429', entryURL }, { state: 'installed' },
+      payload ? { ...SAVED_STATE, connections: payload.connections, models: payload.models } : SAVED_STATE));
+  };
+  pageState.get('baseURL').value = 'https://api.example.com/v1';
+  pageState.get('connId').value = 'main';
+  pageState.get('apiKey').value = 'sk-page-test';
+  pageState.get('discover').listeners.get('click')();
+  await flush();
+
+  const candidates = pageState.get('models').children;
+  expect(candidates).toHaveLength(1);
+  // The declared protocols chose Responses, so the route carries the resp prefix.
+  expect(find(candidates[0], '[data-f="id"]').value).toBe('main/resp-k3');
+  // The DOM stand-in keeps a <select> value out of its innerHTML, so the chosen
+  // protocol is read back the way the browser would report it.
+  find(candidates[0], '[data-f="protocol"]').value = 'responses';
+  await pageState.get('form').listeners.get('submit')({ preventDefault() {} });
+  await flush();
+  const saved = pageState.requests.filter((entry) => entry.pathname === '/api/save').at(-1);
+  expect(saved.body.models[0]).toMatchObject({ id: 'main/resp-k3', upstreamModelId: 'k3',
+    protocol: 'responses', contextWindow: 262144, contextLimit: 262144, metadataSource: origin });
+
+  // Editing the budget makes the number the user's own, so the source goes away.
+  const refilled = pageState.get('models').children[0];
+  find(refilled, '[data-f="contextWindow"]').value = '131072';
+  // Same stand-in limitation as above: the select's choice is set, not parsed.
+  find(refilled, '[data-f="protocol"]').value = 'responses';
+  pageState.get('apiKey').value = 'sk-page-test';
+  await pageState.get('form').listeners.get('submit')({ preventDefault() {} });
+  await flush();
+  const edited = pageState.requests.filter((entry) => entry.pathname === '/api/save').at(-1);
+  expect(edited.body.models[0].contextWindow).toBe(131072);
+  expect(edited.body.models[0]).not.toHaveProperty('metadataSource');
+  expect(edited.body.models[0]).not.toHaveProperty('contextLimit');
+}, 20000);
+
+// --- first-run provider guidance --------------------------------------------
+
+// The provider list is the main first-run entry point. It has to be requested
+// on load: defining a loader without calling it leaves the dropdown with only
+// "custom", which forces a new user to hand-type an address.
+test('the provider presets are loaded on start and fill the dropdown', async () => {
+  const pageState = page({ hash: '#key=abc123', providers: { presets: [
+    { id: 'kimi-code-cn', name: 'Kimi Code（国内）', baseURL: 'https://api.kimi.com/coding/v1',
+      protocols: ['chat', 'responses'], source: { url: 'https://www.kimi.ai/x', checkedAt: '2026-11-02' }, models: [] },
+    { id: 'deepseek', name: 'DeepSeek 官方', baseURL: 'https://api.deepseek.com/v1',
+      protocols: ['chat', 'responses'], models: [] },
+  ] } });
+  await flush();
+  await flush();
+
+  expect(pageState.requests.some((entry) => entry.pathname === '/api/providers')).toBe(true);
+  /* The stand-in does not model `<select>` value semantics: assigning `.value`
+     just stores a string, and `children` only holds appended `<option>` nodes.
+     What matters here is that both presets were appended, and that the note
+     reports the count rather than silently degrading to manual entry. */
+  const options = pageState.get('preset').children;
+  expect(options.map((option) => option.value)).toEqual(['kimi-code-cn', 'deepseek']);
+  expect(options.map((option) => option.textContent)).toEqual(['Kimi Code（国内）', 'DeepSeek 官方']);
+  expect(pageState.get('preset-note').textContent).toContain('2 个供应商预设');
+});
+
+// A saved connection keeps its preset selected after a reload, even though the
+// provider list and the saved state arrive independently.
+test('a saved provider preset is still selected after the list arrives', async () => {
+  const saved = { schemaVersion: 1, configured: true, baseURL: 'https://api.kimi.com/coding/v1',
+    port: 3426, dns: { enabled: false }, apiKeySet: true, tokenSet: true,
+    connections: [{ id: 'kimi', name: 'Kimi Code', providerPresetId: 'kimi-code-cn',
+      baseURL: 'https://api.kimi.com/coding/v1', apiKeySet: true }],
+    models: [{ id: 'kimi/resp-k3', connectionId: 'kimi', protocol: 'responses', contextWindow: 262144 }],
+    configuration: { state: 'ready', file: '/state/gateway.json' },
+    credentials: { state: 'ready', file: '/state/credentials.json' } };
+  const pageState = page({ hash: '#key=abc123', state: saved, providers: { presets: [
+    { id: 'kimi-code-cn', name: 'Kimi Code（国内）', baseURL: 'https://api.kimi.com/coding/v1',
+      protocols: ['chat', 'responses'], models: [] },
+  ] } });
+  await flush();
+  await flush();
+  expect(pageState.get('preset').value).toBe('kimi-code-cn');
+  // Selecting the preset again must never rewrite the saved address by itself.
+  expect(pageState.get('baseURL').value).toBe('https://api.kimi.com/coding/v1');
+});
+
+// A failing provider list must say so instead of looking like "there are no
+// providers", and must leave the form usable.
+test('a failed provider load is stated in place and keeps manual entry usable', async () => {
+  /* The page fires this request while its script is evaluating, so the failing
+     answer has to be in place before the DOM stand-in runs it, not patched in
+     afterwards. */
+  const pageState = page({ hash: '#key=abc123', providersStatus: 503,
+    providers: { error: { code: 'setup_failed' } } });
+  await flush();
+  await flush();
+  expect(pageState.get('preset-note').textContent).toContain('预设列表读取失败');
+  expect(pageState.get('preset-note').textContent).toContain('仍可直接填写');
+  expect(pageState.get('baseURL').disabled).toBe(false);
+});
+
+test('DNS is off by default and only echoes an explicitly saved true', async () => {
+  const fresh = page({ hash: '#key=abc123' });
+  await flush();
+  expect(fresh.get('dns').checked).toBe(false);
+
+  // An existing configuration that really enabled it keeps showing enabled.
+  const enabled = page({ hash: '#key=abc123', state: { schemaVersion: 1, configured: true,
+    baseURL: 'https://api.example.com/v1', port: 3426, dns: { enabled: true }, models: [],
+    configuration: { state: 'ready', file: '/state/gateway.json' },
+    credentials: { state: 'ready', file: '/state/credentials.json' } } });
+  await flush();
+  expect(enabled.get('dns').checked).toBe(true);
+
+  // And a save from a fresh page carries dns:false, so no admin prompt follows.
+  const pageState = page({ hash: '#key=abc123', saved: { ok: true, service: { state: 'installed' },
+    state: { configured: true, models: [], configuration: { file: '/s/g.json' },
+      credentials: { file: '/s/c.json' } } } });
+  await flush();
+  await submit(pageState);
+  const save = pageState.requests.filter((entry) => entry.pathname === '/api/save').at(-1);
+  expect(save.body.dns).toBe(false);
+});
+
+// The catalog load is what spares a new user from hand-typing route IDs and
+// budgets. The response shape below is the real one; the backend's empty-query
+// behavior is a separate change, so this pins the page's own handling.
+test('loading a preset fills rows with routes, budgets and provenance', async () => {
+  const origin = { kind: 'preset', url: 'https://www.kimi.ai/x', checkedAt: '2026-11-02' };
+  const pageState = page({ hash: '#key=abc123', providers: { presets: [
+    { id: 'kimi-code-cn', name: 'Kimi Code（国内）', baseURL: 'https://api.kimi.com/coding/v1',
+      protocols: ['chat', 'responses'], models: [] },
+  ] } });
+  pageState.context.fetch = async (pathname, init = {}) => {
+    const respond = (status, body) => ({ ok: status < 400, status, json: async () => body });
+    pageState.requests.push({ pathname, method: init.method || 'GET', headers: init.headers || {},
+      body: init.body ? JSON.parse(init.body) : undefined });
+    if (pathname === '/api/providers') return respond(200, { presets: [
+      { id: 'kimi-code-cn', name: 'Kimi Code（国内）', baseURL: 'https://api.kimi.com/coding/v1',
+        protocols: ['chat', 'responses'], models: [] }] });
+    if (pathname === '/api/model-search') {
+      return respond(200, { ok: true, query: '', models: [
+        { id: 'k3', name: 'K3', protocols: ['chat', 'responses'], contextWindow: 1048576,
+          metadataSource: origin, tools: true },
+        // No stated protocols and no stated tools: both must stay unconfirmed.
+        { id: 'mystery', contextWindow: 262144 },
+      ] });
+    }
+    return respond(200, { ok: true, state: SAVED_STATE });
+  };
+  await flush();
+  await flush();
+  pageState.get('connId').value = 'kimi';
+  pageState.get('preset').value = 'kimi-code-cn';
+  pageState.get('discover').listeners.get('click')();
+  await flush();
+  await flush();
+
+  const search = pageState.requests.filter((entry) => entry.pathname === '/api/model-search').at(-1);
+  expect(search.body).toEqual({ query: '', presetId: 'kimi-code-cn' });
+  const rows = pageState.get('models').children;
+  expect(rows).toHaveLength(2);
+
+  // A multi-protocol model prefers Responses and gets a generated local route.
+  // The stand-in parses `<option selected>` but does not model `<select>.value`,
+  // so the chosen protocol is read from the generated markup.
+  expect(find(rows[0], '[data-f="id"]').value).toBe('kimi/resp-k3');
+  expect(rows[0].innerHTMLSource).toContain('<option value="responses" selected>');
+  expect(find(rows[0], '[data-f="upstream"]').value).toBe('k3');
+  expect(find(rows[0], '[data-f="contextWindow"]').value).toBe('1048576');
+  expect(find(rows[0], '[data-f="tools"]').checked).toBe(true);
+  // The provenance rides along so saving keeps the budget's evidence.
+  expect(rows[0].__metadataSource).toEqual(origin);
+
+  // Unknown protocols leave no route; unknown tools stay unchecked.
+  expect(find(rows[1], '[data-f="id"]').value).toBe('');
+  expect(find(rows[1], '[data-f="protocol"]').value).toBe('');
+  expect(find(rows[1], '[data-f="tools"]').checked).toBe(false);
+  expect(pageState.get('discover-state').textContent).toContain('已载入 2 个预设模型');
+});
+
+test('loading models before choosing a preset says what to do instead of failing silently', async () => {
+  const pageState = page({ hash: '#key=abc123' });
+  await flush();
+  // No preset selected: the placeholder is still the current value.
+  pageState.get('preset').value = '';
+  pageState.get('discover').listeners.get('click')();
+  expect(pageState.get('discover-state').textContent).toContain('先选择一个供应商预设');
+  expect(pageState.requests.some((entry) => entry.pathname === '/api/model-search')).toBe(false);
+});

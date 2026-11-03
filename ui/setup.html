@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex, nofollow">
-<title>Kimi Work 网关 · 首次设置</title>
+<title>Kimi++ · 首次设置</title>
 <style nonce="__SETUP_NONCE__">
 :root {
   color-scheme: light;
@@ -13,6 +13,10 @@
   --rule: #e2e6ec; --rule-strong: #cfd6df; --rule-input: #c4ccd7;
   --ink: #17202b; --ink-2: #45505e; --ink-3: #626d7c;
   --blue: #1a63bd; --blue-hover: #17589f; --blue-soft: #e8f0fb; --blue-rule: #bcd6f5;
+  /* 主色块上的文字：亮色下白字对 #1a63bd 是 5.89:1；暗色下主色变浅，
+     白字只剩 2.20:1，因此改用深色前景（8.09:1）。这是对比度修正，
+     不是把链接或品牌色整体改暗。 */
+  --on-accent: #ffffff;
   --ok: #1f7a4d; --ok-soft: #e6f4ec; --warn: #8a5708; --warn-soft: #fdf3e0;
   --bad: #b02a2a; --bad-soft: #fbeaea;
   --focus: #1a63bd; --r-sm: 6px; --r-md: 8px; --r-lg: 12px;
@@ -28,6 +32,7 @@
     --rule: #2a323b; --rule-strong: #3a444f; --rule-input: #4a5563;
     --ink: #e8edf4; --ink-2: #b3bdc9; --ink-3: #94a0ad;
     --blue: #7fb2f0; --blue-hover: #a3c8f5; --blue-soft: #1c2a3c; --blue-rule: #34506f;
+    --on-accent: #14181d;
     --ok: #6fce9c; --ok-soft: #16281f; --warn: #e6b566; --warn-soft: #2b2314;
     --bad: #f09a9a; --bad-soft: #2c1a1a; --focus: #7fb2f0;
     --shadow-1: 0 1px 2px rgba(0,0,0,.4);
@@ -74,7 +79,7 @@ label.check input { width: 15px; height: 15px; accent-color: var(--blue); }
 .hint--tight { margin: 8px 0 0; }
 .save-hint { color: var(--ink-3); font-size: 12.5px; }
 .btn-link { display: inline-flex; align-items: center; gap: 8px; background: var(--blue);
-  border: 1px solid var(--blue); color: #fff; font-weight: 600; font-size: 13.5px;
+  border: 1px solid var(--blue); color: var(--on-accent); font-weight: 600; font-size: 13.5px;
   padding: 9px 20px; border-radius: var(--r-sm); text-decoration: none; }
 .btn-link:hover { background: var(--blue-hover); border-color: var(--blue-hover); }
 .btn-link[hidden], .hint[hidden] { display: none; }
@@ -88,7 +93,7 @@ label.check input { width: 15px; height: 15px; accent-color: var(--blue); }
 button { font: inherit; font-size: 13.5px; border-radius: var(--r-sm); border: 1px solid var(--rule-input);
   background: var(--surface); color: var(--ink); padding: 8px 15px; cursor: pointer; }
 button:hover { background: var(--hover); }
-button.primary { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; padding: 9px 20px; }
+button.primary { background: var(--blue); border-color: var(--blue); color: var(--on-accent); font-weight: 600; padding: 9px 20px; }
 button.primary:hover { background: var(--blue-hover); border-color: var(--blue-hover); }
 button.ghost { border-color: transparent; background: transparent; color: var(--ink-3); padding: 4px 8px; font-size: 12.5px; }
 button.ghost:hover { background: var(--hover); color: var(--ink); }
@@ -118,7 +123,7 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>Kimi Work 网关 · 首次设置</h1>
+      <h1>Kimi++ · 首次设置</h1>
       <p class="sub">填一次上游地址、密钥与模型声明，保存到本机用户目录。之后由后台服务维持运行。</p>
     </div>
     <span class="pill"><span class="dot" id="state-dot"></span><span id="state-text">读取中</span></span>
@@ -126,8 +131,26 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
 
   <form id="form" novalidate>
     <section class="card" aria-labelledby="h-upstream">
-      <h2 id="h-upstream">1 · 上游服务</h2>
-      <p class="hint">填写兼容 OpenAI 接口的服务地址与密钥。密钥只写入本机用户目录的私有凭据文件，不回显、不写日志。</p>
+      <h2 id="h-upstream">1 · 供应商与连接</h2>
+      <p class="hint">选择供应商预设或自定义地址。API Key 只写入本机用户目录的私有凭据文件，不回显、不写日志。</p>
+      <label class="field" for="preset">
+        <span class="label">供应商预设（可选）</span>
+        <select id="preset">
+          <option value="">自定义（不套用预设）</option>
+        </select>
+        <span class="note" id="preset-note">选择预设会填入官方地址与已知协议；仍可改为自定义地址。</span>
+      </label>
+      <div class="row">
+        <label class="field" for="connName">
+          <span class="label">连接名称</span>
+          <input id="connName" type="text" autocomplete="off" spellcheck="false" placeholder="DeepSeek 官方">
+        </label>
+        <label class="field" for="connId">
+          <span class="label">连接标识</span>
+          <input id="connId" class="mono" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek">
+          <span class="note">用于生成本机路由 ID，只能是字母、数字、点、下划线与连字符。</span>
+        </label>
+      </div>
       <label class="field" for="baseURL">
         <span class="label">Base URL</span>
         <input id="baseURL" class="mono" type="text" name="baseURL" autocomplete="off" spellcheck="false"
@@ -143,6 +166,10 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
         </div>
         <span class="note" id="key-state">不会显示已保存的值；留空表示保持现有密钥。</span>
       </label>
+      <div class="actions">
+        <button type="button" id="discover">载入预设模型</button>
+        <span class="save-hint" id="discover-state">从本机内置的供应商目录填入已知模型；不联网、不请求上游、不产生费用。</span>
+      </div>
     </section>
 
     <section class="card" aria-labelledby="h-models">
@@ -165,7 +192,7 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
         </label>
         <div class="field field--end">
           <div class="checks">
-            <label class="check"><input type="checkbox" id="dns" checked> 启用本机 DNS 解析（macOS 需要一次管理员授权）</label>
+            <label class="check"><input type="checkbox" id="dns"> 启用本机 DNS 解析（可手选；macOS 需一次管理员授权，通常无需开启）</label>
           </div>
         </div>
       </div>
@@ -238,6 +265,7 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
   };
   var key = '';
   var state = null;
+  var presets = [];
   var saving = false;
   var autoOpened = false;
   var savedShown = false;
@@ -283,16 +311,23 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
   }
 
   function modelRow(model) {
-    var value = model || { id: '', protocol: '', contextWindow: 131072, tools: true };
+    var value = model || { id: '', protocol: '', contextWindow: 262144, tools: true };
     var node = document.createElement('div');
     node.className = 'model';
+    /* 预算来源不是表单字段：它跟着候选走，保存时必须原样带回，否则这条预算
+       在面板里就失去了「这个数字从哪来」的证据。 */
+    node.__metadataSource = value.metadataSource || null;
+    node.__candidateContext = Number(value.contextWindow) > 0 ? Number(value.contextWindow) : 0;
     node.innerHTML = ''
       + '<div class="model__head"><span class="model__title">模型</span>'
       + '<button type="button" class="ghost danger" data-act="remove">移除</button></div>'
-      + '<label class="field"><span class="label">模型 ID</span>'
-      + '<input class="mono" data-f="id" type="text" spellcheck="false" autocomplete="off" value="' + esc(value.id) + '" placeholder="deepseek-v4-1-flash"></label>'
+      + '<label class="field"><span class="label">本机路由 ID</span>'
+      + '<input class="mono" data-f="id" type="text" spellcheck="false" autocomplete="off" value="' + esc(value.id) + '" placeholder="deepseek/resp-deepseek-chat"></label>'
+      + '<label class="field"><span class="label">上游模型 ID</span>'
+      + '<input class="mono" data-f="upstream" type="text" spellcheck="false" autocomplete="off" value="' + esc(value.upstreamModelId || '') + '" placeholder="deepseek-chat">'
+      + '<span class="note">实际发给上游的 model 值，按原样保留；留空表示与本机路由 ID 相同。</span></label>'
       + '<div class="row"><label class="field"><span class="label">显示名称（可选）</span>'
-      + '<input data-f="name" type="text" autocomplete="off" value="' + esc(value.name || '') + '" placeholder="DeepSeek V4.1 Flash"></label>'
+      + '<input data-f="name" type="text" autocomplete="off" value="' + esc(value.name || '') + '" placeholder="DeepSeek Chat"></label>'
       + '<label class="field"><span class="label">接口协议</span>'
       + '<select data-f="protocol">'
       + '<option value="">请选择…</option>'
@@ -300,8 +335,9 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
       + '<option value="responses"' + (value.protocol === 'responses' ? ' selected' : '') + '>Responses</option>'
       + '</select><span class="note" data-derived></span></label></div>'
       + '<div class="row-3">'
-      + '<label class="field"><span class="label">上下文长度</span>'
-      + '<input data-f="contextWindow" type="number" min="1" step="1" value="' + esc(value.contextWindow) + '"></label>'
+      + '<label class="field"><span class="label">上下文预算</span>'
+      + '<input data-f="contextWindow" type="number" min="1" step="1" value="' + esc(value.contextWindow) + '">'
+      + '<span class="note" data-budget>256K、350K、600K 或按上游上限手填</span></label>'
       + '<label class="field"><span class="label">最大输出（可选）</span>'
       + '<input data-f="maxOutputTokens" type="number" min="1" step="1" value="' + esc(value.maxOutputTokens === undefined ? '' : value.maxOutputTokens) + '"></label>'
       + '<label class="field"><span class="label">思考档位（可选）</span>'
@@ -317,12 +353,14 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
       node.remove();
     });
     var idInput = node.querySelector('[data-f="id"]');
+    /* 协议只由本机路由 ID 的末段决定；上游 ID 对网关是不透明字符串，改它
+       不会改变 Kimi 调用的接口。因此提示只看路由 ID，上游输入不参与推导。 */
     var update = function () {
-      var expected = derived(idInput.value);
+      var expected = derived(idInput.value.trim());
       var hint = node.querySelector('[data-derived]');
       hint.textContent = expected
-        ? '此 ID 需使用 ' + (expected === 'chat' ? 'Chat Completions' : 'Responses') + ' 协议'
-        : '协议按模型 ID 推导，必须手工确认';
+        ? '此路由 ID 需使用 ' + (expected === 'chat' ? 'Chat Completions' : 'Responses') + ' 协议'
+        : '协议按路由 ID 推导，必须手工确认';
     };
     idInput.addEventListener('input', update);
     update();
@@ -333,13 +371,17 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
     el('models').appendChild(modelRow(model));
   }
 
+  /* 首设只有一条连接，模型必须挂在它名下：`upstreamModelId` 没有所属连接时
+     服务端无法判断请求该发往哪个上游，会整份拒绝。 */
   function readModels() {
+    var connectionId = el('connId').value.trim();
     return Array.prototype.map.call(el('models').children, function (node) {
       var read = function (name) { return node.querySelector('[data-f="' + name + '"]'); };
       var efforts = String(read('reasoningEfforts').value || '').split(',').map(function (item) {
         return item.trim();
       }).filter(Boolean);
       var maxOutput = read('maxOutputTokens').value.trim();
+      var upstream = read('upstream').value.trim();
       var model = {
         id: read('id').value.trim(),
         protocol: read('protocol').value,
@@ -348,29 +390,128 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
         reasoning: read('reasoning').checked,
         inputModalities: read('image').checked ? ['text', 'image'] : ['text'],
       };
+      if (connectionId) model.connectionId = connectionId;
       var name = read('name').value.trim();
       if (name) model.name = name;
+      if (upstream) model.upstreamModelId = upstream;
       if (maxOutput) model.maxOutputTokens = Number(maxOutput);
       if (efforts.length) model.reasoningEfforts = efforts;
+      /* 预算来源只在候选带回来的那份数值没被改动时才继续成立：用户手改过预算
+         就等于自己给了这个数字，来源随之变成 manual。 */
+      var source = node.__metadataSource;
+      if (source && Number(read('contextWindow').value) === Number(node.__candidateContext)) {
+        model.metadataSource = source;
+        if (Number(node.__candidateContext) > 0) model.contextLimit = Number(node.__candidateContext);
+      }
       return model;
     });
+  }
+
+  /* 首次设置只提交命名连接：旧版顶层 baseURL/apiKey 不再重复发送，
+     每条连接带着自己的密钥，由服务端写入私有凭据文件。 */
+  function readConnection() {
+    var id = el('connId').value.trim();
+    var name = el('connName').value.trim() || id;
+    var connection = { id: id, name: name, baseURL: el('baseURL').value.trim() };
+    var preset = el('preset').value;
+    if (preset) connection.providerPresetId = preset;
+    var key = el('apiKey').value;
+    if (key.trim()) connection.apiKey = key;
+    return connection;
   }
 
   function fill(stateValue, { keepKey = false } = {}) {
     state = stateValue;
     el('state-text').textContent = stateValue.configured ? '已配置' : '尚未配置';
     el('state-dot').setAttribute('data-tone', stateValue.configured ? 'ok' : 'warn');
-    el('baseURL').value = stateValue.baseURL || '';
+    /* 新流程回填从连接读取；旧状态只有 baseURL 时仍按旧字段显示，不丢已存值。 */
+    var connection = stateValue.connections && stateValue.connections.length ? stateValue.connections[0] : null;
+    el('baseURL').value = (connection && connection.baseURL) || stateValue.baseURL || '';
+    el('connName').value = (connection && connection.name) || '';
+    el('connId').value = (connection && connection.id) || '';
+    if (connection && connection.providerPresetId) el('preset').value = connection.providerPresetId;
     if (stateValue.port) el('port').value = String(stateValue.port);
-    if (stateValue.dns) el('dns').checked = stateValue.dns.enabled === true;
+    /* 默认关闭：DNS 只影响本机域名解析，开启它会让首次设置请求管理员授权。
+       已保存配置若显式开了，这里照实回显，不擅自改动用户的选择。 */
+    el('dns').checked = Boolean(stateValue.dns && stateValue.dns.enabled === true);
     if (!keepKey) el('apiKey').value = '';
     el('key-state').textContent = stateValue.apiKeySet
       ? '已保存密钥。留空表示保持现有密钥；填写则替换。'
       : '不会显示已保存的值；留空表示保持现有密钥。';
     el('models').textContent = '';
     var models = stateValue.models && stateValue.models.length ? stateValue.models
-      : [{ id: '', protocol: '', contextWindow: 131072, tools: true }];
+      : [{ id: '', protocol: '', contextWindow: 262144, tools: true }];
     models.forEach(function (model) { addModel(model); });
+  }
+
+  /* 供应商预设只填地址、协议与建议标识；不改用户已填的名称或密钥。 */
+  function applyPreset(presetId) {
+    var preset = null;
+    for (var index = 0; index < presets.length; index++) {
+      if (presets[index].id === presetId) { preset = presets[index]; break; }
+    }
+    if (!preset) {
+      el('preset-note').textContent = '选择预设会填入官方地址与已知协议；仍可改为自定义地址。';
+      return;
+    }
+    if (preset.baseURL) el('baseURL').value = preset.baseURL;
+    if (!el('connName').value.trim()) el('connName').value = preset.name || '';
+    if (!el('connId').value.trim()) {
+      el('connId').value = String(preset.id).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, 64);
+    }
+    var note = '预设来源：' + (preset.source && preset.source.url ? preset.source.url : '未提供');
+    if (preset.notes) note += ' · ' + preset.notes;
+    el('preset-note').textContent = note;
+  }
+
+  /* 首设阶段没有可用凭据，也不会去请求上游：这里用的是本机内置的供应商目录
+     （`POST /api/model-search` 只读共享预设并按名检索），因此文案如实写「载入
+     预设模型」。模型 ID 原样保留，本机路由按协议自动生成，能力未知就不勾选。 */
+  function loadPresetModels() {
+    var preset = el('preset').value;
+    if (!preset) {
+      el('discover-state').textContent = '先选择一个供应商预设，再载入它的已知模型。';
+      el('preset').focus();
+      return;
+    }
+    var known = presets.filter(function (entry) { return entry.id === preset; })[0] || null;
+    el('discover-state').textContent = '正在载入预设模型…';
+    api('/api/model-search', { method: 'POST', body: { query: '', presetId: preset } })
+      .then(function (payload) {
+        var models = payload && payload.models;
+        if (!models || !models.length) {
+          el('discover-state').textContent = known
+            ? '该预设没有列出可载入的模型；请手动添加，或改选其他预设。'
+            : '没有可用模型；请先选择供应商预设。';
+          return;
+        }
+        var connectionId = el('connId').value.trim();
+        el('models').textContent = '';
+        models.slice(0, 32).forEach(function (model) {
+          /* 三态与面板一致：声明过的协议按偏好选，`protocols: []` 是端点自己
+             的判定（未声明或与本端点无交集），不回退任何默认协议。 */
+          var protocols = Array.isArray(model.protocols) ? model.protocols : [];
+          var protocol = protocols.indexOf('responses') >= 0 ? 'responses'
+            : protocols.length ? protocols[0] : '';
+          var route = connectionId && protocol
+            ? connectionId + '/' + (protocol === 'chat' ? 'kimi-' : 'resp-') + encodeURIComponent(model.id)
+            : '';
+          /* 能力未知时留空待确认，不用 `!== false` 把未知当支持。 */
+          addModel({ id: route, upstreamModelId: model.id, name: model.name || '',
+            protocol: protocol, contextWindow: model.contextWindow || 262144,
+            metadataSource: model.metadataSource || null,
+            maxOutputTokens: model.maxOutputTokens,
+            tools: model.tools === true ? true : undefined,
+            reasoning: model.reasoning === true, inputModalities: model.inputModalities,
+            reasoningEfforts: model.reasoningEfforts });
+        });
+        el('discover-state').textContent = '已载入 ' + Math.min(models.length, 32)
+          + ' 个预设模型；协议未声明的行需你手动选择，工具能力以勾选状态为准。';
+      })
+      .catch(function (error) {
+        el('discover-state').textContent = '载入预设模型失败：'
+          + (MESSAGES[error && error.code] || '请检查供应商预设后重试。');
+      });
   }
 
   function facts(result) {
@@ -506,24 +647,37 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
     stopPoll();
     pollAttempts = 0;
     el('done-card').hidden = true;
-    var baseURL = el('baseURL').value.trim();
-    var apiKey = el('apiKey').value;
+    var connection;
+    try { connection = readConnection(); } catch (error) { connection = null; }
     var port = Number(el('port').value);
     var models;
     try { models = readModels(); }
     catch (error) { say('bad', MESSAGES.invalid_models); return; }
-    if (!baseURL) { say('bad', '请填写 Base URL。'); el('baseURL').focus(); return; }
-    if (!apiKey.trim() && !(state && state.apiKeySet)) {
+    if (!connection) { say('bad', MESSAGES.invalid_setup); return; }
+    if (!connection.baseURL) { say('bad', '请填写 Base URL。'); el('baseURL').focus(); return; }
+    if (!connection.id) { say('bad', '请填写连接标识。'); el('connId').focus(); return; }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(connection.id)) {
+      say('bad', '连接标识只能使用字母、数字、点、下划线与连字符，且以字母或数字开头。');
+      el('connId').focus();
+      return;
+    }
+    if (!connection.apiKey && !(state && state.apiKeySet)) {
       say('bad', '请填写 API Key。'); el('apiKey').focus(); return;
     }
     for (var index = 0; index < models.length; index++) {
-      if (!models[index].id) { say('bad', '第 ' + (index + 1) + ' 个模型缺少 ID。'); return; }
+      if (!models[index].id) { say('bad', '第 ' + (index + 1) + ' 个模型缺少本机路由 ID。'); return; }
       if (!models[index].protocol) { say('bad', '第 ' + (index + 1) + ' 个模型未选择接口协议。'); return; }
-      if (!(models[index].contextWindow > 0)) { say('bad', '第 ' + (index + 1) + ' 个模型的上下文长度无效。'); return; }
+      if (!(models[index].contextWindow > 0)) { say('bad', '第 ' + (index + 1) + ' 个模型的上下文预算无效。'); return; }
+      /* 协议必须与路由 ID 末段一致：服务端会拒绝，越过这一步只会白等一次请求。 */
+      var expected = derived(models[index].id);
+      if (expected && expected !== models[index].protocol) {
+        say('bad', '第 ' + (index + 1) + ' 个模型的路由 ID 需要 ' + (expected === 'chat' ? 'Chat Completions' : 'Responses') + ' 协议。');
+        return;
+      }
     }
-    var payload = { baseURL: baseURL, port: port, dns: el('dns').checked, models: models,
+    /* 只提交命名连接：每条连接携带自己的密钥，旧版顶层 baseURL/apiKey 不再重复发送。 */
+    var payload = { connections: [connection], port: port, dns: el('dns').checked, models: models,
       installService: el('installService').checked };
-    if (apiKey.trim()) payload.apiKey = apiKey.trim();
     setSaving(true);
     el('save-hint').textContent = payload.installService ? '正在写入配置并安装后台服务…' : '正在写入配置…';
     api('/api/save', { method: 'POST', body: payload }).then(function (result) {
@@ -543,7 +697,7 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
 
   el('add-model').addEventListener('click', function () {
     if (el('models').children.length >= 32) { say('warn', '最多 32 个模型。'); return; }
-    addModel({ id: '', protocol: '', contextWindow: 131072, tools: true });
+    addModel({ id: '', protocol: '', contextWindow: 262144, tools: true });
   });
 
   el('toggle-key').addEventListener('click', function () {
@@ -552,6 +706,44 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
     input.type = hidden ? 'text' : 'password';
     el('toggle-key').textContent = hidden ? '隐藏' : '显示';
   });
+
+  el('preset').addEventListener('change', function () { applyPreset(el('preset').value); });
+  el('discover').addEventListener('click', loadPresetModels);
+
+  /* 供应商预设是首设最主要的入口，必须真的加载：只定义不调用会让下拉里只剩
+     「自定义」，新手只能手填地址。失败时保留手填并说明原因，不静默降级。
+     已保存的预设可能在列表到达之前就回填进 select，因此加载完成后按当前值
+     重新对齐一次，保证 reload 后仍然选中。 */
+  function loadPresets() {
+    return api('/api/providers').then(function (payload) {
+      var list = payload && Array.isArray(payload.presets) ? payload.presets : [];
+      presets = list;
+      var select = el('preset');
+      var current = select.value;
+      list.forEach(function (preset) {
+        var option = document.createElement('option');
+        option.value = preset.id;
+        option.textContent = preset.name || preset.id;
+        select.appendChild(option);
+      });
+      if (current) select.value = current;
+      if (!list.length) {
+        el('preset-note').textContent = '没有可用的供应商预设，请直接填写地址与协议。';
+        return;
+      }
+      if (select.value) {
+        var chosen = list.filter(function (entry) { return entry.id === select.value; })[0];
+        el('preset-note').textContent = '当前预设：' + (chosen ? chosen.name || chosen.id : select.value)
+          + '；改动选择会填入该预设的官方地址与已知协议。';
+      } else {
+        el('preset-note').textContent = '共 ' + list.length + ' 个供应商预设；选择后会填入官方地址与已知协议。';
+      }
+    }).catch(function (error) {
+      presets = [];
+      el('preset-note').textContent = '预设列表读取失败（' + describe(error)
+        + '）；仍可直接填写地址与协议。';
+    });
+  }
 
   el('reload').addEventListener('click', function () {
     clearMessage();
@@ -600,11 +792,23 @@ footer { margin-top: 8px; color: var(--ink-3); font-size: 12px; text-align: cent
     el('save').disabled = true;
     return;
   }
-  addModel({ id: '', protocol: '', contextWindow: 131072, tools: true });
-  load(false).catch(function (error) {
+  /* 预设列表与已存状态互不依赖：两者并行发起，任何一方失败都不影响另一方。
+     预设晚到也没关系——`loadPresets` 会按 select 的当前值重新对齐，因此已保存
+     的 providerPresetId 在 reload 后仍然选中。 */
+  var presetsReady = loadPresets();
+  var stateReady = load(false);
+  void presetsReady;
+  stateReady.catch(function (error) {
     say('bad', describe(error));
     el('state-dot').setAttribute('data-tone', 'bad');
     el('state-text').textContent = '读取失败';
+  });
+  // `fill()` 写 select 时选项可能还没到，值会落空；预设到达后只补选中状态，
+  // 不重新套用预设——那会用预设地址覆盖用户已保存的 baseURL。
+  presetsReady.then(function () {
+    var connection = state && state.connections && state.connections.length ? state.connections[0] : null;
+    var wanted = connection && connection.providerPresetId;
+    if (wanted && el('preset').value !== wanted) el('preset').value = wanted;
   });
 })();
 </script>

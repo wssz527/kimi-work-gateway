@@ -16,12 +16,13 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readConfig } from './config.mjs';
-import { validatePanelModels } from './panel-settings.mjs';
+import { presetById, searchCatalog, validatePanelModels } from './panel-settings.mjs';
+import { providerPresets } from './provider-catalog.mjs';
 import { validateBaseURL } from './openai-backend.mjs';
 import { defaultStateDirectory } from './paths.mjs';
 import { readPanelEntry } from './service-manager.mjs';
 
-export const SETUP_SCHEMA_VERSION = 1;
+export const SETUP_SCHEMA_VERSION = 2;
 export const SETUP_CONFIG_FILE = 'gateway.json';
 export const SETUP_CREDENTIALS_FILE = 'credentials.json';
 export const SETUP_RECEIPT_FILE = 'setup-receipt.json';
@@ -29,9 +30,13 @@ export const SETUP_BODY_LIMIT = 64 * 1024;
 export const UPSTREAM_KEY_ENV = 'KIMI_WORK_UPSTREAM_KEY';
 export const GATEWAY_TOKEN_ENV = 'KIMI_WORK_GATEWAY_TOKEN';
 export const DEFAULT_GATEWAY_PORT = 3426;
-const MODEL_FIELDS = new Set(['id', 'name', 'protocol', 'contextWindow', 'maxOutputTokens', 'tools', 'reasoning',
-  'inputModalities', 'reasoningEfforts', 'defaultEffort']);
-const CREDENTIAL_FIELDS = new Set(['schemaVersion', 'upstreamApiKey', 'gatewayToken', 'createdAt', 'updatedAt']);
+const MODEL_FIELDS = new Set(['id', 'name', 'protocol', 'contextWindow', 'contextLimit', 'metadataSource',
+  'maxOutputTokens', 'tools', 'reasoning', 'inputModalities', 'reasoningEfforts', 'defaultEffort',
+  'connectionId', 'upstreamModelId']);
+const CREDENTIAL_FIELDS = new Set(['schemaVersion', 'upstreamApiKey', 'connectionApiKeys', 'gatewayToken',
+  'createdAt', 'updatedAt']);
+const CONNECTION_FIELDS = new Set(['id', 'name', 'providerPresetId', 'baseURL', 'apiKeyEnv', 'protocols', 'apiKey']);
+const CONNECTION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const KEY_PATTERN = /^[\x21-\x7e]{1,4096}$/;
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -115,19 +120,40 @@ export function setupPaths({ stateDir, configPath } = {}) {
 
 // The credentials file is created only by this module, so its own schema is
 // proof of ownership. Anything else at that path is a conflict, not an
-// invitation to overwrite.
+// invitation to overwrite. Version 1 stored a single upstream key; it is still
+// read so an existing installation keeps working without a re-run of setup.
 export function readCredentials(file, options = {}) {
   const document = readJson(file, options);
   if (document === null) return null;
   if (typeof document !== 'object' || Array.isArray(document)
     || Object.keys(document).some(key => !CREDENTIAL_FIELDS.has(key))
-    || document.schemaVersion !== SETUP_SCHEMA_VERSION
-    || typeof document.upstreamApiKey !== 'string' || !KEY_PATTERN.test(document.upstreamApiKey)
+    || ![1, 2].includes(document.schemaVersion)
+    || document.upstreamApiKey !== undefined && (typeof document.upstreamApiKey !== 'string'
+      || !KEY_PATTERN.test(document.upstreamApiKey))
     || typeof document.gatewayToken !== 'string' || !TOKEN_PATTERN.test(document.gatewayToken)) {
     throw new SetupError('setup_credentials_conflict', 409);
   }
-  return { upstreamApiKey: document.upstreamApiKey, gatewayToken: document.gatewayToken,
-    createdAt: document.createdAt, updatedAt: document.updatedAt };
+  const connectionApiKeys = readConnectionApiKeys(document.connectionApiKeys);
+  if (document.schemaVersion === 1 && (document.upstreamApiKey === undefined || document.connectionApiKeys !== undefined)) {
+    throw new SetupError('setup_credentials_conflict', 409);
+  }
+  return { upstreamApiKey: document.upstreamApiKey, connectionApiKeys,
+    gatewayToken: document.gatewayToken, createdAt: document.createdAt, updatedAt: document.updatedAt };
+}
+
+// Only `<connection id>: <key>` pairs are stored, and a malformed map is a
+// conflict rather than a silently dropped credential.
+function readConnectionApiKeys(value) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new SetupError('setup_credentials_conflict', 409);
+  const keys = {};
+  for (const [id, key] of Object.entries(value)) {
+    if (!CONNECTION_ID.test(id) || typeof key !== 'string' || !KEY_PATTERN.test(key)) {
+      throw new SetupError('setup_credentials_conflict', 409);
+    }
+    keys[id] = key;
+  }
+  return keys;
 }
 
 export function newGatewayToken() {
@@ -135,13 +161,36 @@ export function newGatewayToken() {
 }
 
 // Keeps the existing token so the value Kimi already stores keeps working; a
-// missing or empty file gets a fresh random one.
-export function writeCredentials(file, { upstreamApiKey, existing } = {}, options = {}) {
-  const value = { schemaVersion: SETUP_SCHEMA_VERSION, upstreamApiKey,
+// missing or empty file gets a fresh random one. Per-connection keys are
+// merged, never replaced wholesale, so saving one connection cannot drop the
+// credential of another.
+export function writeCredentials(file, { upstreamApiKey, connectionApiKeys, existing } = {}, options = {}) {
+  const keys = { ...(existing?.connectionApiKeys || {}) };
+  for (const [id, key] of Object.entries(connectionApiKeys || {})) {
+    if (typeof key !== 'string' || !KEY_PATTERN.test(key)) throw new SetupError('invalid_api_key');
+    keys[id] = key;
+  }
+  const value = { schemaVersion: SETUP_SCHEMA_VERSION,
+    ...(upstreamApiKey === undefined ? existing?.upstreamApiKey === undefined ? {} : { upstreamApiKey: existing.upstreamApiKey }
+      : { upstreamApiKey }),
+    ...(Object.keys(keys).length ? { connectionApiKeys: keys } : {}),
     gatewayToken: existing?.gatewayToken ?? newGatewayToken(),
     createdAt: existing?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString() };
   writePrivateJson(file, value, options);
   return value;
+}
+
+// A connection key saved from the panel lands in the same private file as the
+// other credentials. Removing a connection leaves its key alone: a stale key is
+// harmless, and deleting one on a mistyped edit could not be undone.
+export function writeConnectionKeys(file, { apiKeys } = {}, options = {}) {
+  if (!file) throw new SetupError('setup_credentials_missing', 409);
+  if (!apiKeys || typeof apiKeys !== 'object' || Array.isArray(apiKeys) || !Object.keys(apiKeys).length) {
+    throw new SetupError('invalid_api_key');
+  }
+  const existing = readCredentials(file, { ...options, requirePrivate: true });
+  if (!existing) throw new SetupError('setup_credentials_missing', 409);
+  return writeCredentials(file, { connectionApiKeys: apiKeys, existing }, options);
 }
 
 export function normalizeSetupModels(value) {
@@ -155,16 +204,43 @@ export function normalizeSetupModels(value) {
     return {
       id: row.id, ...(row.name === undefined ? {} : { name: row.name }), protocol: row.protocol,
       contextWindow: row.contextWindow,
+      ...(row.contextLimit === undefined ? {} : { contextLimit: row.contextLimit }),
+      ...(row.metadataSource === undefined ? {} : { metadataSource: row.metadataSource }),
       ...(row.maxOutputTokens === undefined ? {} : { maxOutputTokens: row.maxOutputTokens }),
       ...(row.tools === undefined ? {} : { tools: row.tools }),
       ...(row.reasoning === undefined ? {} : { reasoning: row.reasoning }),
       ...(row.inputModalities === undefined ? {} : { inputModalities: row.inputModalities }),
       ...(row.reasoningEfforts === undefined ? {} : { reasoningEfforts: row.reasoningEfforts }),
       ...(row.defaultEffort === undefined ? {} : { defaultEffort: row.defaultEffort }),
+      ...(row.connectionId === undefined ? {} : { connectionId: row.connectionId }),
+      ...(row.upstreamModelId === undefined ? {} : { upstreamModelId: row.upstreamModelId }),
     };
   });
   try { return validatePanelModels(models); }
-  catch (error) { throw new SetupError(error.message === 'protocol_conflict' ? 'protocol_conflict' : 'invalid_models'); }
+  catch (error) {
+    const known = ['protocol_conflict', 'context_window_exceeds_limit'];
+    throw new SetupError(known.includes(error.message) ? error.message : 'invalid_models');
+  }
+}
+
+// Connections are optional: an empty list keeps the single-upstream page that
+// shipped before connections existed. A key given here belongs to the private
+// credential file, so it is split off before anything reaches the config.
+function normalizeSetupConnections(value) {
+  if (value === undefined) return { connections: undefined, apiKeys: {} };
+  if (!Array.isArray(value) || value.length > 32) throw new SetupError('invalid_connections');
+  const apiKeys = {};
+  const connections = value.map(row => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw new SetupError('invalid_connections');
+    for (const key of Object.keys(row)) if (!CONNECTION_FIELDS.has(key)) throw new SetupError('invalid_connections');
+    if (row.apiKey !== undefined) {
+      if (typeof row.apiKey !== 'string' || !KEY_PATTERN.test(row.apiKey.trim())) throw new SetupError('invalid_api_key');
+      apiKeys[row.id] = row.apiKey.trim();
+    }
+    const { apiKey, ...connection } = row;
+    return connection;
+  });
+  return { connections, apiKeys };
 }
 
 export function normalizeSetupInput(input, { port = DEFAULT_GATEWAY_PORT, dns = true } = {}) {
@@ -173,16 +249,25 @@ export function normalizeSetupInput(input, { port = DEFAULT_GATEWAY_PORT, dns = 
   // rejected instead of being silently ignored.
   const apiKey = input.apiKey === undefined ? '' : input.apiKey;
   if (typeof apiKey !== 'string' || apiKey && !KEY_PATTERN.test(apiKey.trim())) throw new SetupError('invalid_api_key');
-  let baseURL;
-  try { baseURL = validateBaseURL(input.baseURL); } catch { throw new SetupError('invalid_base_url'); }
   const models = normalizeSetupModels(input.models);
+  const { connections, apiKeys } = normalizeSetupConnections(input.connections);
+  // Without a legacy upstream block there is nothing to validate; with one,
+  // the page must supply the address it was always required to send.
+  let upstream;
+  if (input.baseURL !== undefined || !connections?.length) {
+    let baseURL;
+    try { baseURL = validateBaseURL(input.baseURL); } catch { throw new SetupError('invalid_base_url'); }
+    upstream = { baseURL, apiKeyEnv: UPSTREAM_KEY_ENV };
+  }
   const gatewayPort = input.port === undefined ? port : Number(input.port);
   if (!Number.isInteger(gatewayPort) || gatewayPort < 1024 || gatewayPort > 65535) throw new SetupError('invalid_port');
   const dnsEnabled = input.dns === undefined ? dns : input.dns === true;
-  const config = { upstream: { baseURL, apiKeyEnv: UPSTREAM_KEY_ENV }, tokenEnv: GATEWAY_TOKEN_ENV,
+  const config = { ...(upstream ? { upstream } : {}), ...(connections ? { connections } : {}), tokenEnv: GATEWAY_TOKEN_ENV,
     port: gatewayPort, dns: { enabled: dnsEnabled, port: 53535 }, models };
-  try { readConfig(config); } catch { throw new SetupError('invalid_config'); }
-  return { config, apiKey: apiKey.trim() };
+  try { readConfig(config); } catch (error) {
+    throw new SetupError(error.message === 'protocol_conflict' ? 'protocol_conflict' : 'invalid_config');
+  }
+  return { config, apiKey: apiKey.trim(), connectionApiKeys: apiKeys };
 }
 
 export function readSetupReceipt(file) {
@@ -207,7 +292,7 @@ function ownershipMatches(receipt, paths, resolvedConfig) {
 // Fields this tool owns. Everything else in an existing document (translation,
 // subagents a user wrote by hand, future settings) is preserved verbatim, so a
 // re-run of setup never rebuilds the file and drops configuration.
-const OWNED_CONFIG_FIELDS = new Set(['upstream', 'tokenEnv', 'port', 'dns', 'models']);
+const OWNED_CONFIG_FIELDS = new Set(['upstream', 'connections', 'tokenEnv', 'port', 'dns', 'models']);
 
 export function mergeSetupConfig(current, next) {
   if (!current || typeof current !== 'object' || Array.isArray(current)) return next;
@@ -218,12 +303,19 @@ export function mergeSetupConfig(current, next) {
     if (!OWNED_CONFIG_FIELDS.has(key) && current[key] !== undefined) continue;
     merged[key] = value;
   }
+  // A connections-only save replaces the legacy upstream, and a leftover block
+  // would keep demanding a key no model uses. Only a save that did not send an
+  // upstream of its own may drop the stored one.
+  if (next && next.upstream === undefined && merged.upstream !== undefined
+    && !merged.models?.some(model => model?.connectionId === undefined)) {
+    delete merged.upstream;
+  }
   return merged;
 }
 
 // A hand-written configuration is never replaced: an existing file is only
 // accepted when the receipt proves this tool wrote that file before.
-export function saveSetup({ paths, config, apiKey, platform = process.platform,
+export function saveSetup({ paths, config, apiKey, connectionApiKeys, platform = process.platform,
   uid = currentUid(platform) } = {}) {
   if (!paths) throw new SetupError('invalid_setup');
   const criteria = { platform, uid };
@@ -248,12 +340,17 @@ export function saveSetup({ paths, config, apiKey, platform = process.platform,
   // Preserve everything setup does not own, and keep the current models when
   // the page did not declare any change.
   let document = mergeSetupConfig(currentConfig, config);
-  try { readConfig(document); } catch { throw new SetupError('invalid_config'); }
+  try { readConfig(document); } catch (error) {
+    throw new SetupError(error.message === 'protocol_conflict' ? 'protocol_conflict' : 'invalid_config');
+  }
   // A blank key keeps the stored one; there is nothing to keep the first time.
+  // A legacy key is required only when a model still routes through `upstream`.
   const upstreamApiKey = typeof apiKey === 'string' && apiKey.trim() ? apiKey.trim() : existing?.upstreamApiKey;
-  if (!upstreamApiKey) throw new SetupError('invalid_api_key');
+  const legacyModels = document.models?.some(model => model && typeof model === 'object' && model.connectionId === undefined);
+  if (document.upstream && legacyModels && !upstreamApiKey) throw new SetupError('invalid_api_key');
   writePrivateJson(paths.config, document, criteria);
-  const credentials = writeCredentials(paths.credentials, { upstreamApiKey, existing }, criteria);
+  const credentials = writeCredentials(paths.credentials,
+    { ...(upstreamApiKey ? { upstreamApiKey } : {}), connectionApiKeys, existing }, criteria);
   writePrivateJson(paths.receipt, { schemaVersion: SETUP_SCHEMA_VERSION, config: resolvedConfig,
     credentials: path.resolve(paths.credentials), stateDir: path.resolve(paths.stateDir),
     token: receipt?.token ?? crypto.randomBytes(16).toString('hex'),
@@ -262,7 +359,8 @@ export function saveSetup({ paths, config, apiKey, platform = process.platform,
   return { credentials, config: document, receiptWritten: true };
 }
 
-// Public view for the page: never includes the upstream key or gateway token.
+// Public view for the page: never includes an upstream key, a connection key or
+// the gateway token. Each connection reports only whether its key is present.
 export function setupState({ paths, platform = process.platform, uid = currentUid(platform) }) {
   let config = null;
   let credentials = null;
@@ -275,10 +373,15 @@ export function setupState({ paths, platform = process.platform, uid = currentUi
     schemaVersion: SETUP_SCHEMA_VERSION,
     platform,
     configured: Boolean(config && credentials),
-    baseURL: config?.upstream.baseURL ?? null,
+    baseURL: config?.upstream?.baseURL ?? null,
     port: config?.port ?? null,
     dns: config ? { ...config.dns } : null,
     models: config?.models ?? [],
+    connections: (config?.connections ?? []).map(connection => ({ id: connection.id, name: connection.name,
+      ...(connection.providerPresetId ? { providerPresetId: connection.providerPresetId } : {}),
+      baseURL: connection.baseURL, apiKeyEnv: connection.apiKeyEnv,
+      ...(connection.protocols ? { protocols: [...connection.protocols] } : {}),
+      apiKeySet: Boolean(credentials?.connectionApiKeys?.[connection.id]) })),
     apiKeySet: Boolean(credentials?.upstreamApiKey),
     tokenSet: Boolean(credentials?.gatewayToken),
     configuration: { state: config ? 'ready' : 'absent', file: paths.config },
@@ -422,11 +525,21 @@ export class SetupServer {
         return;
       }
       if (req.url === '/favicon.ico') throw new SetupError('not_found', 404);
-      if (req.url !== '/api/state' && req.url !== '/api/save') throw new SetupError('not_found', 404);
+      if (!['/api/state', '/api/save', '/api/providers', '/api/model-search'].includes(req.url)) {
+        throw new SetupError('not_found', 404);
+      }
       if (this.failures >= 20) throw new SetupError('too_many_attempts', 429);
       if (!authorized(req.headers.authorization, this.key)) {
         this.failures++;
         throw new SetupError('unauthorized', 401);
+      }
+      // The catalog endpoints are static-only: they expose the shipped presets
+      // and rank them locally. No network call is made, no saved connection is
+      // read (there may be none), and no native surface is reachable before an
+      // authenticated save has happened.
+      if (req.method === 'GET' && req.url === '/api/providers') {
+        json(200, { presets: providerPresets() });
+        return;
       }
       if (req.method === 'GET' && req.url === '/api/state') {
         // A save that left the panel starting keeps its expectation in memory,
@@ -446,6 +559,21 @@ export class SetupServer {
       }
       if (req.method !== 'POST') throw new SetupError('method_not_allowed', 405);
       if (req.headers.origin !== this.origin) throw new SetupError('origin_refused', 403);
+      // Static catalog search during the first run: the page names a preset and
+      // gets that preset's own documented models, ranked locally. The address is
+      // never fetched here, so this cannot become an open network proxy before
+      // the user has authenticated a configuration.
+      if (req.url === '/api/model-search') {
+        const input = await readBody(req);
+        if (typeof input.query !== 'string' || input.query.length > 200
+          || input.presetId !== undefined && typeof input.presetId !== 'string') {
+          throw new SetupError('invalid_model_search');
+        }
+        const preset = input.presetId === undefined ? null : presetById(input.presetId);
+        if (input.presetId !== undefined && !preset) throw new SetupError('invalid_model_search');
+        json(200, { query: input.query, models: preset ? searchCatalog({ preset, query: input.query }) : [] });
+        return;
+      }
       if (this.pending) throw new SetupError('setup_busy', 409);
       this.pending = true;
       try {
@@ -478,17 +606,17 @@ export class SetupServer {
   // The link is only returned to this authenticated page, and it is read from
   // the 0600 file rather than printed into a log.
   async save(input) {
-    const { config, apiKey } = normalizeSetupInput(input);
+    const { config, apiKey, connectionApiKeys } = normalizeSetupInput(input);
     let previous = null;
     try { previous = readJson(this.paths.config); } catch {}
     // A restart replaces the panel process, and with it the session key in the
     // entry file. The entry that exists before the install therefore proves
     // nothing about the configuration just saved; only a different entryURL can.
     const previousEntry = readPanelEntry(this.paths.entry, { uid: this.uid });
-    const { config: document } = saveSetup({ paths: this.paths, config, apiKey, platform: this.platform });
+    const { config: document } = saveSetup({ paths: this.paths, config, apiKey, connectionApiKeys, platform: this.platform });
     const state = setupState({ paths: this.paths, platform: this.platform });
     const changed = previous === null || digest(previous) !== digest(document);
-    const result = { ok: true, changed, state, gateway: { baseURL: config.upstream.baseURL, port: config.port },
+    const result = { ok: true, changed, state, gateway: { baseURL: config.upstream?.baseURL ?? null, port: config.port },
       service: null, panel: null };
     if (input.installService === true) {
       if (typeof this.installService !== 'function') result.service = { state: 'unavailable', reason: 'service_unavailable' };
@@ -595,9 +723,11 @@ export class SetupServer {
   }
 }
 
-// Reads the two credential values for a background run. They stay in memory
-// only: a service definition carries neither the upstream key nor the token,
-// and the environment it launches with is built from this function.
+// Reads the credential values for a background run. They stay in memory only:
+// a service definition carries neither an upstream key nor the token, and the
+// environment it launches with is built from this function. A connection whose
+// key is absent from the private file is left out rather than filled with an
+// empty value, so startup reports exactly which variable is missing.
 export function readCredentialEnvironment(configPath, credentialsPath, options = {}) {
   let config;
   try { config = readConfig(readJson(configPath, options)); }
@@ -605,8 +735,36 @@ export function readCredentialEnvironment(configPath, credentialsPath, options =
   if (!config) throw new SetupError('setup_config_missing', 409);
   const credentials = readCredentials(credentialsPath, { ...options, requirePrivate: true });
   if (!credentials) throw new SetupError('setup_credentials_missing', 409);
-  return { config, environment: { [config.upstream.apiKeyEnv]: credentials.upstreamApiKey,
-    [config.tokenEnv]: credentials.gatewayToken } };
+  return { config, environment: credentialEnvironment(config, credentials) };
+}
+
+// The named variables a saved configuration plus its credential file provide.
+// Values never leave this object; it is spread into the gateway process only.
+// A missing or partially written credential file yields fewer names rather
+// than throwing, so a caller can report exactly what is absent.
+export function credentialEnvironment(config, credentials) {
+  const environment = {};
+  if (!credentials) return environment;
+  if (config.upstream && credentials.upstreamApiKey) environment[config.upstream.apiKeyEnv] = credentials.upstreamApiKey;
+  for (const connection of config.connections) {
+    const key = credentials.connectionApiKeys?.[connection.id];
+    if (key) environment[connection.apiKeyEnv] = key;
+  }
+  if (credentials.gatewayToken) environment[config.tokenEnv] = credentials.gatewayToken;
+  return environment;
+}
+
+// The variables a configuration needs before it can serve. A model without a
+// connection routes through the legacy upstream, so only that path requires
+// the legacy key.
+export function requiredCredentialNames(config) {
+  const names = [];
+  if (config.upstream && config.models.some(model => model?.connectionId === undefined)) names.push(config.upstream.apiKeyEnv);
+  for (const connection of config.connections) {
+    if (config.models.some(model => model?.connectionId === connection.id)) names.push(connection.apiKeyEnv);
+  }
+  names.push(config.tokenEnv);
+  return [...new Set(names)];
 }
 
 // The panel entry file holds the panel URL with its session fragment. It is

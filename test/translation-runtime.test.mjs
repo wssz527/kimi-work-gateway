@@ -7,9 +7,11 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { readConfig } from '../src/config.mjs';
 import { normalizeTranslationConfig, TRANSLATION_DEFAULTS } from '../src/translation-config.mjs';
-import { TranslationRuntime, readTranslationSettings } from '../src/translation-runtime.mjs';
+import { TranslationRuntime, readTranslationSettings, translationRevision } from '../src/translation-runtime.mjs';
 import { TranslationPipe } from '../src/translation-pipe.mjs';
-import { readSubagentJSON, writeSubagentJSON } from '../src/subagent-policy.mjs';
+import { readSubagentJSON, writeSubagentJSON, currentDocumentRevision } from '../src/subagent-policy.mjs';
+
+const digestSubagentJSON = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 const dirs = [];
 function fixture(overrides = {}) {
@@ -29,6 +31,12 @@ function fixture(overrides = {}) {
   runtime.configure({ enabled: true });
   return { dir, runtime, calls };
 }
+
+const sharedDir = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kwg-translation-cas-'));
+  dirs.push(dir);
+  return dir;
+};
 
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
@@ -289,6 +297,118 @@ test('translation version metadata is cached briefly and refreshed after upgrade
   expect(runtime.inspect()).toEqual({ state: 'not-started' });
   expect(runtime.inspect()).toEqual({ state: 'not-started' });
   expect(probes).toBe(3);
+});
+
+// The settings save must not become a panel-side re-read: the guard is applied
+// inside the atomic write itself, re-deriving the current revision from the
+// file right before the rename. These helpers read through the same on-disk
+// file afterwards, so an in-memory shortcut could not satisfy them.
+test('expected-revision writes re-check the real file and never overwrite a concurrent editor', () => {
+  const { dir, runtime } = fixture();
+  const file = runtime.settingsFile;
+  const stamp = () => { const stat = fs.statSync(file); return stat.size + ':' + stat.mtimeMs; };
+  const current = readTranslationSettings(file, runtime.homeDir);
+  // The token is opaque: the digest of the whole on-disk document, distinct
+  // from the revision field stored inside it.
+  expect(currentDocumentRevision(file)).not.toEqual(current.revision);
+  const token = currentDocumentRevision(file);
+  expect(currentDocumentRevision(file)).toEqual(token);
+
+  // Same guard, same intended content: a retry after a successful save passes
+  // and leaves the stored document exactly as intended.
+  const rewrite = { schemaVersion: 1, homeDir: runtime.homeDir, settings: current.settings, revision: current.revision };
+  writeSubagentJSON(file, rewrite, token);
+  expect(readTranslationSettings(file, runtime.homeDir)).toEqual(current);
+  expect(currentDocumentRevision(file)).toEqual(token);
+
+  // A stale token — the file moved on after the caller looked at it — throws
+  // without touching the file.
+  writeSubagentJSON(file, { ...current, settings: { ...current.settings, provider: 'google' },
+    revision: translationRevision({ ...current.settings, provider: 'google' }, runtime.homeDir) });
+  const concurrent = readTranslationSettings(file, runtime.homeDir);
+  expect(currentDocumentRevision(file)).not.toEqual(token);
+  const movedOn = stamp();
+  expect(() => writeSubagentJSON(file, rewrite, token)).toThrow('translation_settings_conflict');
+  expect(readTranslationSettings(file, runtime.homeDir)).toEqual(concurrent);
+  expect(stamp()).toBe(movedOn);
+
+  // An arbitrary token is not the current one, so it cannot write either.
+  expect(() => writeSubagentJSON(file, rewrite, '0'.repeat(64))).toThrow('translation_settings_conflict');
+  expect(readTranslationSettings(file, runtime.homeDir)).toEqual(concurrent);
+  expect(stamp()).toBe(movedOn);
+
+  // Unparsable or out-of-scope files are hostile state, not a writable base:
+  // the guarded write refuses both instead of silently replacing them. The
+  // parse error surfaces as-is, matching what every readSubagentJSON caller
+  // already reports for corrupt state.
+  fs.writeFileSync(file, 'not-json');
+  expect(() => writeSubagentJSON(file, rewrite, null)).toThrow();
+  expect(() => writeSubagentJSON(file, rewrite, token)).toThrow();
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, homeDir: '/another-scope', settings: current.settings,
+    revision: translationRevision(current.settings, '/another-scope') }, null, 2) + '\n');
+  expect(() => writeSubagentJSON(file, rewrite, token)).toThrow('translation_settings_conflict');
+  const foreign = readSubagentJSON(file);
+  expect(currentDocumentRevision(file)).toEqual(digestSubagentJSON(foreign));
+
+  // A missing file is only writable through the `null` token.
+  fs.rmSync(file);
+  expect(currentDocumentRevision(file)).toBeNull();
+  writeSubagentJSON(file, rewrite, null);
+  expect(readTranslationSettings(file, runtime.homeDir)).toEqual(current);
+  expect(() => writeSubagentJSON(file, { ...rewrite, homeDir: '/another-scope' }, null))
+    .toThrow('translation_settings_conflict');
+});
+
+// Two processes saving different settings for the same home directory must not
+// silently drop each other: the loser sees a conflict and the file keeps the
+// winner's document, and a retry based on a fresh read succeeds. Without the
+// guard the old behaviour stands — both writes land and the second simply wins.
+test('concurrent runtimes saving different settings conflict instead of overwriting each other', () => {
+  const dir0 = sharedDir();
+  const first = new TranslationRuntime({ stateDir: dir0, kimiDir: dir0 });
+  const second = new TranslationRuntime({ stateDir: dir0, kimiDir: dir0 });
+  first.configure({ enabled: true, provider: 'bing' });
+  const file = first.settingsFile;
+  const observed = currentDocumentRevision(file);
+  expect(readTranslationSettings(file, first.homeDir).settings.provider).toBe('bing');
+
+  // Both runtimes base their next save on the same observed document, but the
+  // second one wins the race; the first one's write is stale by then.
+  second.configure({ enabled: true, provider: 'google' }, { expectedRevision: observed });
+  const afterSecond = currentDocumentRevision(file);
+  expect(afterSecond).not.toEqual(observed);
+  expect(() => first.configure({ enabled: true, provider: 'custom',
+    customEndpoint: 'http://127.0.0.1:3000/v1/chat/completions' }, { expectedRevision: observed }))
+    .toThrow('translation_settings_conflict');
+  expect(readTranslationSettings(file, first.homeDir).settings.provider).toBe('google');
+  expect(currentDocumentRevision(file)).toEqual(afterSecond);
+
+  // A retry against the document that is actually on disk goes through.
+  expect(first.configure({ enabled: true, provider: 'custom',
+    customEndpoint: 'http://127.0.0.1:3000/v1/chat/completions' },
+  { expectedRevision: afterSecond }).customEndpoint).toBe('http://127.0.0.1:3000/v1/chat/completions');
+
+  // A caller that disables through the legacy path still wins immediately, and
+  // a guarded save based on the pre-disable document cannot resurrect enabled.
+  first.configure({ enabled: false });
+  expect(readTranslationSettings(file, first.homeDir).settings.enabled).toBe(false);
+  expect(() => second.configure({ enabled: true }, { expectedRevision: afterSecond }))
+    .toThrow('translation_settings_conflict');
+  expect(readTranslationSettings(file, first.homeDir).settings.enabled).toBe(false);
+});
+
+// Legacy callers keep the historical last-writer-wins save: no expectedRevision
+// means no guard, and a plain configure() still lands even over a newer file.
+test('configure without expectedRevision keeps the legacy overwrite behaviour', () => {
+  const dir0 = sharedDir();
+  const first = new TranslationRuntime({ stateDir: dir0, kimiDir: dir0 });
+  const second = new TranslationRuntime({ stateDir: dir0, kimiDir: dir0 });
+  first.configure({ enabled: true, provider: 'bing' });
+  second.configure({ enabled: true, provider: 'google' });
+  expect(readTranslationSettings(first.settingsFile, first.homeDir).settings.provider).toBe('google');
+  first.configure({ enabled: true, provider: 'custom', customEndpoint: 'http://127.0.0.1:3000/v1/chat/completions' });
+  expect(readTranslationSettings(first.settingsFile, first.homeDir).settings.customEndpoint)
+    .toBe('http://127.0.0.1:3000/v1/chat/completions');
 });
 
 test('translation installation treats new and unknown version metadata as informational', () => {

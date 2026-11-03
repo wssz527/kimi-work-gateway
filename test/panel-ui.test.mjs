@@ -110,7 +110,14 @@ globalThis.panelUI = { state, modelIdFromAlias, evaluateBinding, isInFlight, con
   buildTranslation, savedTranslation, evaluateTranslation, translationLaunchState, translationKey,
   translationFormValues, fillTranslationForm, renderTranslation, saveTranslation, translationAvailable,
   draftFromSaved, sameTarget, setMode, pickModel, pickEffort, pickPoolDefault, appendPoolModel,
-  removePoolModel, toggleTransport, discardDraft, poolRow, saveSubagentTarget };`, context);
+  removePoolModel, toggleTransport, discardDraft, poolRow, saveSubagentTarget,
+  routeIdFor, routingOf, connectionDraftFrom, connectionsSignature, connectionsDirty, connectionPayload,
+  validateConnectionDraft, contextDraftFrom, normalizedRatio, ratioToPercent, percentToRatio,
+  validateContextDraft, evaluateContext, contextDirty, rankedCandidates, connectionScore,
+  mcpServerPayload, toolsResultText, parseEnvLines, parseHeaderLines, toolsState, toolsAvailable,
+  renderConnections, renderContext, renderTools, renderPicker, saveConnections, saveContextPolicy,
+  submitTools, pickCandidate, metadataSourceOf, runConnectionCheck, connectionsAvailable,
+  evaluateUpdate, versionOrder };`, context);
   return { ...context.panelUI, window, events, nodes, requests };
 }
 
@@ -798,10 +805,12 @@ test('saving translation posts every setting with the revision and never claims 
       apiKeyEnv: 'TRANSLATION_KEY' },
     environment: { keySet: true },
     runtime: { state: 'pending-settings' },
+    revision: 'e'.repeat(64),
   }) });
   const panel = ui({ hash: '#key=unit-panel-session',
     routes: { '/api/translation': { status: 200, body: { ok: true, state: saved } } } });
-  panel.state.data = baseState({ translation: translationState() });
+  panel.state.data = baseState({ revision: 'a'.repeat(64),
+    translation: translationState({ revision: 'e'.repeat(64) }) });
   panel.adoptState(panel.state.data, { initial: true });
 
   panel.nodes.get('tr-enabled').checked = true;
@@ -818,7 +827,11 @@ test('saving translation posts every setting with the revision and never claims 
   const posted = panel.requests.filter((entry) => entry.path === '/api/translation');
   expect(posted.length).toBe(1);
   expect(posted[0].method).toBe('POST');
-  expect(posted[0].body).toEqual({ revision: 'a'.repeat(64), enabled: true, provider: 'custom',
+  /* 双锁同发：revision 是 gateway.json 整体修订（历史 CAS），translationRevision
+     是翻译设置自己的修订，服务端把它作为 CAS 令牌下传给运行时写入；设置在
+     别处被改过时服务端以 409 translation_settings_conflict 拒绝。 */
+  expect(posted[0].body).toEqual({ revision: 'a'.repeat(64), translationRevision: 'e'.repeat(64),
+    enabled: true, provider: 'custom',
     targetLanguage: 'ja', view: 'original', customEndpoint: 'https://translate.example.com/v1/chat/completions',
     customModel: 'small-model', apiKeyEnv: 'TRANSLATION_KEY' });
 
@@ -1190,4 +1203,181 @@ test('inherit drafts never carry a transport and revoking the panel target stays
   expect(panel.state.draftDirty).toBe(true);
   expect(panel.nodes.get('sa-native-row').hidden).toBe(true);
   expect(panel.savedTarget(data).transport).toBe('native-config');
+});
+
+/* ---------- M43: restart guidance, per-connection checks, translation revision ---------- */
+
+function connectionsState(overrides = {}) {
+  return baseState({
+    connections: {
+      active: [
+        { id: 'conn-a', name: 'Provider A', baseURL: 'https://a.example/v1', apiKeyEnv: 'KIMI_WORK_CONN_A_KEY',
+          legacy: false, modelCount: 1, apiKeySet: true },
+      ],
+      saved: null,
+      restartRequired: false,
+    },
+    ...overrides,
+  });
+}
+
+test('restart guidance names the service commands only when a matching service record is reported', () => {
+  const panel = ui();
+  panel.state.data = connectionsState();
+  panel.setView('connection');
+  panel.renderConnection();
+  expect(panel.nodes.get('restart-head').textContent).toContain('终端完成');
+  expect(panel.nodes.get('restart-service').hidden).toBe(true);
+  expect(panel.nodes.get('restart-foreground').hidden).toBe(false);
+
+  panel.state.data = connectionsState({ service: { mode: 'service', label: 'dev.kimi-work-gateway',
+    config: 'gateway.json' } });
+  panel.renderConnection();
+  expect(panel.nodes.get('restart-head').textContent).toContain('后台服务');
+  expect(panel.nodes.get('restart-service').hidden).toBe(false);
+  expect(panel.nodes.get('restart-foreground').hidden).toBe(true);
+  expect(panel.nodes.get('restart-service-restart').textContent).toBe('kimi-work-gateway service restart');
+  expect(panel.nodes.get('restart-service-status').textContent).toBe('kimi-work-gateway service status');
+  expect(panel.nodes.get('restart-service-config').textContent).toBe('gateway.json');
+  const steps = panel.nodes.get('restart-service').children
+    .flatMap((child) => child.children || []).map((child) => child.textContent || '').join(' ');
+  expect(steps).not.toContain('Ctrl');
+
+  panel.state.data = connectionsState({ service: { mode: 'unrecognized' } });
+  panel.renderConnection();
+  expect(panel.nodes.get('restart-service').hidden).toBe(true);
+  expect(panel.nodes.get('restart-foreground').hidden).toBe(false);
+});
+
+test('an uninstalled or unrecognized service never claims the page can restart anything', () => {
+  const panel = ui();
+  for (const service of [null, { mode: 'unrecognized' }, {}]) {
+    panel.state.data = connectionsState({ service });
+    panel.renderConnection();
+    expect(panel.nodes.get('restart-service').hidden).toBe(true);
+    expect(panel.nodes.get('restart-foreground').hidden).toBe(false);
+    expect(panel.nodes.get('restart-head').textContent).toContain('终端完成');
+  }
+});
+
+test('connection rows offer an inline check and report its result per connection', async () => {
+  const op = { id: 'op-check-a', state: 'passed', httpStatus: 200, modelCount: 7, ms: 42,
+    connectionId: 'conn-a', action: 'check-upstream' };
+  const panel = ui({
+    hash: '#key=unit-panel-session',
+    routes: {
+      '/api/actions': { status: 202, body: { ok: true, operation: op } },
+      '/api/state': { status: 200, body: connectionsState() },
+    },
+  });
+  panel.state.data = connectionsState();
+  panel.adoptState(panel.state.data, { initial: true });
+  panel.renderConnections();
+
+  expect(await panel.runConnectionCheck('conn-a')).toMatchObject({ state: 'passed', connectionId: 'conn-a', busy: false });
+  const posted = panel.requests.filter((entry) => entry.path === '/api/actions');
+  expect(posted[0].body).toMatchObject({ action: 'check-upstream', connectionId: 'conn-a' });
+  expect(panel.state.connChecks['conn-a']).toMatchObject({ state: 'passed', busy: false });
+  expect(typeof posted[0].body.id).toBe('string');
+
+  const row = panel.nodes.get('conns-list').children[0];
+  const text = JSON.stringify(row);
+  expect(text).toContain('检查连接');
+  expect(text).toContain('连接可用：7 个模型');
+  expect(text).not.toContain('正在检查');
+});
+
+test('a failed inline check surfaces the reason and never reuses another row’s result', async () => {
+  const panel = ui({
+    hash: '#key=unit-panel-session',
+    routes: { '/api/actions': { status: 202, body: { ok: true, operation: {
+      id: 'op-check-b', state: 'failed', reason: 'upstream_http_error', httpStatus: 401,
+      connectionId: 'conn-a', action: 'check-upstream' } } } },
+  });
+  panel.state.data = connectionsState();
+  panel.adoptState(panel.state.data, { initial: true });
+  const recorded = await panel.runConnectionCheck('conn-a');
+  expect(recorded).toMatchObject({ state: 'failed', httpStatus: 401, connectionId: 'conn-a' });
+  expect(messageOf(panel)).toContain('检查未通过');
+});
+
+test('a check-upstream reply for a different connection is ignored, not adopted', async () => {
+  const panel = ui({
+    hash: '#key=unit-panel-session',
+    routes: { '/api/actions': { status: 202, body: { ok: true, operation: {
+      id: 'op-check-c', state: 'passed', connectionId: 'conn-other', action: 'check-upstream' } } } },
+  });
+  panel.state.data = connectionsState();
+  panel.adoptState(panel.state.data, { initial: true });
+  const recorded = await panel.runConnectionCheck('conn-a');
+  expect(recorded).toBeNull();
+  expect(messageOf(panel)).toContain('不符');
+});
+
+test('a stale translation settings revision refreshes state and keeps the draft', async () => {
+  const refreshed = baseState({ revision: 'f'.repeat(64), translation: translationState({
+    configured: { ...translationState().configured, enabled: true },
+    revision: '0'.repeat(64),
+  }) });
+  const panel = ui({
+    hash: '#key=unit-panel-session',
+    routes: {
+      '/api/translation': { status: 409, body: { error: { code: 'translation_settings_conflict',
+        message: '翻译设置已在别处被修改。', expectedRevision: '0'.repeat(64) } } },
+      '/api/state': { status: 200, body: refreshed },
+    },
+  });
+  panel.state.data = baseState({ revision: 'a'.repeat(64),
+    translation: translationState({ revision: 'e'.repeat(64) }) });
+  panel.adoptState(panel.state.data, { initial: true });
+
+  panel.nodes.get('tr-enabled').checked = true;
+  panel.renderTranslation();
+  expect(await panel.saveTranslation()).toBe(false);
+  expect(panel.state.data.revision).toBe('f'.repeat(64));
+  expect(panel.state.data.translation.revision).toBe('0'.repeat(64));
+  expect(panel.nodes.get('tr-enabled').checked).toBe(true);
+  /* 草稿仍在：409 后不回填表单，用户确认后可以原样重存。 */
+  expect(panel.state.translation.dirty).toBe(false);
+  expect(messageOf(panel)).toContain('重新保存');
+});
+
+/* ---------- M43 补充：本地版本高于最新 Release 时的更新文案 ---------- */
+
+test('a local version above the latest release reads as no update needed, not as the newest', () => {
+  const panel = ui();
+  const base = { state: 'current', currentVersion: '0.9.0', latestVersion: '0.8.0',
+    pendingVersion: null, rollbackVersion: null, checkedAt: 1 };
+
+  const ahead = panel.evaluateUpdate(baseState({ updates: base }));
+  expect(ahead.state).toBe('current');
+  expect(ahead.ahead).toBe(true);
+  expect(ahead.word).toBe('无需更新');
+  expect(ahead.note).toContain('0.9.0');
+  expect(ahead.note).toContain('0.8.0');
+  expect(ahead.note).not.toContain('就是最新');
+
+  const equal = panel.evaluateUpdate(baseState({ updates: { ...base, currentVersion: '0.8.0' } }));
+  expect(equal.ahead).toBe(false);
+  expect(equal.word).toBe('已是最新');
+
+  // 一个版本无法比较时保持原措辞，不猜大小。
+  const incomparable = panel.evaluateUpdate(baseState({ updates: { ...base, currentVersion: 'dev' } }));
+  expect(incomparable.ahead).toBe(false);
+  expect(incomparable.word).toBe('已是最新');
+
+  expect(panel.versionOrder('0.9.0', '0.8.0')).toBe(1);
+  expect(panel.versionOrder('v0.8.0', '0.8.0')).toBe(0);
+  expect(panel.versionOrder('0.10.0', '0.9.0')).toBe(1);
+  expect(panel.versionOrder('0.9', '0.8.0')).toBeNull();
+});
+
+test('the update hint names the version facts instead of claiming newest when local is ahead', () => {
+  const panel = ui();
+  panel.state.data = baseState({ updates: { state: 'current', currentVersion: '0.9.0',
+    latestVersion: '0.8.0', pendingVersion: null, rollbackVersion: null } });
+  panel.setView('connection');
+  panel.renderConnection();
+  const verdict = panel.nodes.get('upd-verdict-word').textContent;
+  expect(verdict).toBe('无需更新');
 });

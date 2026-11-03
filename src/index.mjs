@@ -1,4 +1,11 @@
 export { KimiWorkGateway, nativeCatalog, openAIModels, validateModels } from './gateway.mjs';
+export { providerPresets, searchModels, parseDiscoveredModels } from './provider-catalog.mjs';
+export { catalogCandidates, searchCatalog, presetById, discoverModels, discoveredModel,
+  DISCOVERY_CAPABILITY_FIELDS } from './panel-settings.mjs';
+export { NativeContextPolicy, NATIVE_CONTEXT_RATIO_MIN, NATIVE_CONTEXT_RATIO_MAX } from './native-context-policy.mjs';
+export { NativeMcpManager, findInstalledKernel, redactMcpServer } from './native-mcp-manager.mjs';
+export { PanelController, PanelError, toolResult } from './panel-controller.mjs';
+export { GatewayPanel } from './panel.mjs';
 export { OpenAIBackend, validateBaseURL } from './openai-backend.mjs';
 export { applyInstructions, applyResponsesInstructions, applySharedInstructions, INSTRUCTION_TAGS } from './instructions.mjs';
 export { NativeByokDNS, BYOK_DOMAIN, BYOK_ADDRESS, BYOK_DNS_PORT, dnsReply, nativePrivateAddress,

@@ -18,7 +18,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readConfig } from './config.mjs';
 import { defaultStateDirectory } from './paths.mjs';
-import { readCredentials } from './setup.mjs';
+import { inspectRunner } from './service-runner.mjs';
+import { readCredentials, credentialEnvironment, requiredCredentialNames } from './setup.mjs';
 
 // The credentials file stores exactly these two names. A config that names
 // other variables cannot be started from it, so install refuses it instead of
@@ -367,6 +368,20 @@ export class GatewayService {
   }
 
   record() {
+    try { return readRecord(this.paths.service); }
+    catch { return null; }
+  }
+
+  // Read-only runner snapshot for the panel: whether the supervised runner is
+  // alive and, when it is, whether its panel child is up. Proves nothing about
+  // intent and holds no secret, so the panel may show it as-is.
+  runnerState() {
+    return inspectRunner({ stateDir: this.stateDir, uid: this.uid, platform: this.platform });
+  }
+
+  // `record` above is the canonical name the panel reads; keep the original
+  // installer shape under its own name.
+  buildRecord() {
     return { schemaVersion: SERVICE_SCHEMA_VERSION, label: this.label, platform: this.platform,
       definition: null, definitionDigest: null, launcher: this.launcherPath, node: this.nodePath,
       config: this.configPath, credentials: this.credentialsFile, entry: this.entryFile, log: this.logFile,
@@ -374,7 +389,7 @@ export class GatewayService {
   }
 
   writeRecord(plan, environment) {
-    writeAtomic(this.paths.service, JSON.stringify({ ...this.record(),
+    writeAtomic(this.paths.service, JSON.stringify({ ...this.buildRecord(),
       kind: plan.kind, definition: plan.definition?.path ?? null, definitionDigest: digest(plan.definition.content),
       environment: Object.keys(environment) }, null, 2) + '\n');
   }
@@ -419,17 +434,25 @@ export class GatewayService {
   }
 
   // Confirms the saved setup can start without an interactive shell: a readable
-  // config plus a private credential file the background start can use. The
-  // credentials file stores exactly the two default variable names, so a config
-  // naming other variables cannot be started from it and is refused here rather
-  // than failing on every login.
+  // config plus a private credential file that can supply every variable the
+  // configuration actually routes through. A connections-only setup has no
+  // legacy upstream, so it is accepted without one; the legacy name rule still
+  // applies whenever a model routes through the legacy block, because the
+  // private file stores that key under exactly one name.
   preflight() {
     const config = readConfigFile(this.configPath);
-    if (config.upstream.apiKeyEnv !== CREDENTIAL_UPSTREAM_ENV || config.tokenEnv !== CREDENTIAL_TOKEN_ENV) {
+    const legacyModels = config.models.some(model => model?.connectionId === undefined);
+    if (config.tokenEnv !== CREDENTIAL_TOKEN_ENV
+      || config.upstream && legacyModels && config.upstream.apiKeyEnv !== CREDENTIAL_UPSTREAM_ENV) {
       throw Error('service_credentials_name_mismatch');
     }
     const credentials = readPrivateCredentials(this.credentialsFile);
-    if (!credentials?.upstreamApiKey || !credentials?.gatewayToken) throw Error('service_credentials_missing');
+    // A background start gets its environment from this file alone; anything
+    // the configuration needs and the file cannot supply would fail every login.
+    const environment = credentialEnvironment(config, credentials);
+    if (requiredCredentialNames(config).some(name => !environment[name])) {
+      throw Error('service_credentials_missing');
+    }
     return { models: config.models.length };
   }
 

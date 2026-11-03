@@ -13,7 +13,7 @@
 Kimi 的原生接入有三个容易被忽略的前提，本工具把它们一次性做完并给出可核对的证据：
 
 1. 隐藏入口需要显示（Kimi 用户数据里的 `byok-availability.json`）。
-2. 它会对 `dev.msh.team` 做一次内网可用性检查；本工具用一个精确的单域名本地 DNS 回答它，不接管其他域名。
+2. 它会对 `dev.msh.team` 做一次内网可用性检查；启用本机 DNS 解析时，本工具用一个精确的单域名本地 DNS 回答它，不接管其他域名。
 3. 它按模型 **ID 的命名**选择接口：最后一段以 `kimi-` 开头走 Chat Completions，其余走 Responses。名字和协议对不上时，模型会在导入阶段被静默丢弃。
 
 ## 安装与首次使用
@@ -38,7 +38,7 @@ npm.cmd install --global --ignore-scripts "https://github.com/wssz527/kimi-work-
 
 这是从 GitHub Release 安装固定版本，安装后可执行 `kimi-work-gateway help`。Windows PowerShell 使用 `kimi-work-gateway.cmd`，无需更改脚本执行策略。命令需要联网下载安装包；发行附件同时提供 `SHA256SUMS`。本项目未发布到 npm Registry，请使用完整发行包地址。
 
-已有 Magpie 且只需要模型接入与子代理控制时，优先安装 [Magpie 插件](https://github.com/wssz527/magpie-agent-kimi-work-byok#安装)，不必另装独立版。独立版的思考翻译入口不包含在插件内。
+已有 Magpie 且不需要下面的完整控制面板时，优先安装 [Magpie 插件](https://github.com/wssz527/magpie-agent-kimi-work-byok#安装)。插件在自己的「Kimi Work 模型设置」页提供模型接入、子代理与思考翻译设置，复用本项目嵌入的核心翻译引擎；它不包含本项目的 Web 控制面板。
 
 ### 2. 打开首次配置页
 
@@ -54,21 +54,21 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd setup`。命令打开本机配�
 
 ### 3. 在 Kimi 选择模型
 
-打开并登录普通 Kimi 桌面应用，完成首次系统管理员授权。后台自动准备单域名解析、显示原生 BYOK 入口，并调用 Kimi 自己的导入接口保存本地网关连接。等待面板显示“模型目录已接入 Kimi 原生选择器”后，即可在 Work 输入框旁选择主模型；子代理在面板配置固定模型或模型池。
+打开并登录普通 Kimi 桌面应用。后台显示原生 BYOK 入口，并调用 Kimi 自己的导入接口保存本地网关连接；本机 DNS 解析默认关闭，只有你在配置页勾选「启用本机 DNS 解析」时才需要一次系统管理员授权。等待面板显示“模型目录已接入 Kimi 原生选择器”后，即可在 Work 输入框旁选择主模型；子代理在面板配置固定模型或模型池。
 
-不需要复制 Token 或手动填写 Kimi 网关设置。Kimi 正在处理任务时会等待空闲；首次授权取消或接入中断时，到 **连接与诊断 → 重新接入 Kimi** 重试。无法确认当前账户、已有设置属于其他来源或接口结构变化时，会保留配置并给出状态，避免错误覆盖。
+不需要复制 Token 或手动填写 Kimi 网关设置。Kimi 正在处理任务时会等待空闲；首次授权取消或接入中断时，到 **连接与工具 → 重新接入 Kimi** 重试。无法确认当前账户、已有设置属于其他来源或接口结构变化时，会保留配置并给出状态，避免错误覆盖。
 
 ### 日常运行、升级与移除
 
 - 首次配置安装的后台服务在用户登录后运行。关闭浏览器或终端不停止网关；只有手动运行的 `panel` / `serve` 依赖对应进程。
 - 在面板增删模型、修改能力后，目录自动同步到 Kimi；不依赖 Kimi 的每日刷新。已有任务结束后再进行需要内核切换的更新。
 - 模型目录、凭据、子代理池、用途与翻译设置在用户目录内保存，不随 Kimi 或网关版本号变化。Kimi 重启、安装文件更新或接入通道结束后，后台重新检查结构与实时忙闲状态，恢复导入通道和已启用翻译。用户主动退出 Kimi 时不会立即把它重新打开。
-- 网关程序更新后用 `kimi-work-gateway service restart` 应用新版本；后台先等待推理请求和 Kimi 任务结束，再正常重启。服务入口通过稳定 bootstrap 读取已激活的程序版本，不绑定某个 Release 副本。可用 `service status` 查看状态和控制面板链接，`service stop` / `service start` 暂停或恢复。
+- 网关程序更新或连接修改后，用 `kimi-work-gateway service restart` 应用；后台先等待推理请求和 Kimi 任务结束，再正常重启，面板内没有重启按钮。服务入口通过稳定 bootstrap 读取已激活的程序版本，不绑定某个 Release 副本。可用 `service status` 查看状态和控制面板链接，`service stop` / `service start` 暂停或恢复。
 - 不要同时启用独立网关和 Magpie 插件占用同一组默认端口。切换来源时，先停用旧来源，再让新来源接入。
 - 卸载前运行 `kimi-work-gateway service uninstall`，再按[断开](#断开)撤销系统解析，最后执行 `npm uninstall --global kimi-work-gateway`（PowerShell 使用 `.cmd` 命令）。卸载不删除用户模型和凭据；不再需要时自行移除状态目录及 `program-updates/` 中的回退副本。
 - 分享仓库或发行包，让安装者使用自己的上游与凭据。不要分享 `credentials.json`、账号文件、真实状态目录或带 `#key=` 的面板链接。
 
-准备在你的机器上具体做了什么：
+启用本机 DNS 解析时，准备在你的机器上具体做了什么：
 
 | 平台 | 写入 | 是否需要常驻进程 |
 | --- | --- | --- |
@@ -88,15 +88,29 @@ kimi-work-gateway panel --config gateway.json
 
 面板默认只监听 `127.0.0.1:3427`，使用独立的 `#key=` 链接鉴权；页面从地址栏移除密钥并保存在当前标签页。服务重启后使用新的入口。不要与已接入的 Magpie 插件同时占用默认网关端口。
 
-- **模型管理**：增删模型与能力声明，保存后立即更新网关，并自动请求 Kimi 原生导入。当前子代理仍依赖的模型或档位不能删除，请先更换目标。
+- **模型管理**：增删模型与能力声明，保存后立即更新网关，并自动请求 Kimi 原生导入。当前子代理仍依赖的模型或档位不能删除，请先更换目标。每个模型同时显示本机路由 ID、所属连接与真实上游模型 ID。
+- **连接**：命名连接列表，每条独立地址与协议限制；API Key 只写入本机私有凭据文件，页面保存后清空输入框且从不回显。保存采用整组替换，省略 Key 表示保留旧值。每条已保存连接有独立的「检查」按钮，按该行自己的 `connectionId` 请求上游 `GET /models`（6 秒超时），结果也按 `connectionId` 认领并显示状态、HTTP 码、模型数与耗时；后端绝不隐式挑选连接，未在运行进程中的连接返回 409 `connection_unavailable`。**面板不会热重启自己**：保存写入配置文件并立即显示「已保存 → 草稿」差异与待重启状态，当前进程继续使用启动时读取的连接；重启面板后才生效，后台服务场景由页面按真实运行方式给出 `kimi-work-gateway service restart`（以及 `service status` 找回入口），前台终端运行则提示在终端 Ctrl+C 后重启——页面自身永不执行重启。待重启期间模型、子代理与翻译保存暂停，把连接改回当前生效值即可撤销。启动方式没有可写凭据文件时就地提示，不会假装已保存。
+- **候选模型**：候选来自所选供应商预设的目录，并与该连接最近一次已保存的上游读取合并；搜索由服务端统一排序返回，只有点击「读取上游目录」时才按该连接请求上游 `GET /models`，点选后保留真实上游模型 ID。上游声明的协议按声明使用：多协议默认取 Responses 且可切换，单协议直接采用。空协议列表是端点自己的判定，不生成路由也不回退预设；只有协议字段整段缺失时才沿用已验证的预设协议并标注来源，其余情况需人工确认。
+- **上下文预算**：每个模型可选 256K、350K、600K 或完整上限，也可手填。已知上游上限时超出会被拒绝，上限未知时「完整」不可用——预设不会提高套餐本身允许的上下文。
+- **上下文整理**：可保持 Kimi 原生默认，或写入触发阈值（50–99%）与预留预算。「已写入原生配置」只表示配置已落盘，正在运行的会话不会中途改变，需新会话读取；本面板不承诺整理后的目标占比。
 - **思考强度**：使用上游真实声明的档位，支持 `low`、`medium`、`high`、`xhigh` 及其他合法标识符；自动档位使用该模型的默认值。
 - **视觉能力**：声明 `text,image` 后转发图片；只有上游实际支持才有效。
 - **子代理**：继承、固定或模型池。池内保存候选、用途与默认模型，切换只影响新建子代理。文件写入、工具定义可见与真实调用分别报告；主模型在 Work 原生菜单选择。
-- **连接设置**：编辑地址、端口、DNS 和凭据变量名。普通配置不保存密钥；`setup` 保存的私有凭据由服务在启动时读取，其他凭据可从环境提供。连接修改后重启服务；当前运行值与已保存值分别显示。
-- **诊断与请求**：上游检查仅请求 `GET /models`，兼容检查只读本机解析器。概览只记录模型、协议、HTTP结果和耗时等元数据，重启清零，不记录对话、图片或响应正文。
-- **Kimi接入**：自动准备、同步与恢复；取消授权后可主动重试。固定模型和模型池使用原版 Kimi，本机私有管道宿主维护原生导入与翻译，不要求副本。复制 Token 和旧兼容副本保留为手动操作。
+- **MCP 工具**：直接管理 Kimi 原生 MCP 服务器（stdio、HTTP、SSE），不依赖 Magpie，也不改动原生默认工具。列表只读取、不启动进程；环境变量与请求头只显示名字，参数只显示数量。只有点击「测试」才会启动服务器，`timeout` 表示结果未知、`busy` 表示上一次测试尚未结束，两者都不自动重试。
+- **概览**：显示连接数、当前子代理路由与上游模型、上下文策略状态、原生工具数量，以及本进程实测的首字节、总耗时、平均输出速率、用量与上次请求输入。用量缺失显示「未提供」而不是 0；平均输出速率按整段请求耗时计算（含等待首字节），不是逐字生成速度；「上次请求输入」是那次请求的输入 token 占已设上下文预算的比例，不代表距上游硬上限的余量；费用没有可靠来源，不做估算。
+- **Kimi接入**：自动显示入口、同步与恢复；本机 DNS 解析默认关闭，启用时才请求一次管理员授权，取消授权后可主动重试。固定模型和模型池使用原版 Kimi，本机私有管道宿主维护原生导入与翻译，不要求副本。复制 Token 和旧兼容副本保留为手动操作。
 
-`panel` 必须使用实际 JSON 文件，不接受 `--config -`。保存会保留原配置的未知字段；多个页面同时保存会提示版本冲突。手动在外部更改基础配置仍需重启。退出命令会关闭两个监听并按归属恢复继承。高级用途可给 `serve` / `panel` 加 `--no-native`，仅运行网关，不自动准备或接管桌面应用。
+原来的独立诊断面板已收成连接页的一行本机目录兼容性检查：失败诊断不作为独立视图，用户不需要诊断中心。
+
+`panel` 必须使用实际 JSON 文件，不接受 `--config -`。保存会保留原配置的未知字段；多个页面同时保存会提示版本冲突。连接修改保存在配置文件里，当前进程继续用启动时读取的连接，重启 `panel` 后生效；模型修改不受此限制，保存后仍即时生效。服务安装场景用 `service restart`。退出命令会关闭两个监听并按归属恢复继承。高级用途可给 `serve` / `panel` 加 `--no-native`，仅运行网关，不自动准备或接管桌面应用。
+
+### 与 Magpie 插件的边界
+
+这是两个独立软件，互不依赖，思考翻译设置两边都有：
+
+- **Kimi++（本项目）**是独立网关与完整本机面板，自带连接、上下文、MCP 工具、子代理与思考翻译页面。它不要求安装 Magpie，也不通过 Magpie 的 MCP 或插件 API 工作。
+- **Magpie 插件**面向已在用 Magpie 的用户：模型接入、子代理与思考翻译都在插件自己的「Kimi Work 模型设置」页配置，复用本项目嵌入的核心翻译引擎与监督器。插件不包含本项目的 Web 控制面板，也不重复实现 Magpie 宿主已有的目录、路由、用量与 MCP 管理。
+- 两者都会占用同一个默认网关端口，不要同时运行。安装、升级与移除互不影响；底层核心代码同源，翻译引擎行为一致，但设置入口、页面与状态显示各自独立。
 
 ## 桌面接入边界
 
@@ -108,18 +122,27 @@ kimi-work-gateway panel --config gateway.json
 
 | 接口 | 请求与响应 |
 | --- | --- |
-| `GET /api/state` | 状态、模型、子代理、连接、翻译设置与真实会话状态、请求统计及诊断摘要；不含密钥值 |
-| `POST /api/models` | `{revision, models}`，完整模型目录；成功返回 `{ok:true,state}` 并立即应用 |
-| `POST /api/connection` | `{revision, upstream:{baseURL,apiKeyEnv}, tokenEnv, port, dns:{enabled,port}}`；成功返回 `{ok:true,state}`，连接等重启后应用 |
+| `GET /api/state` | 状态、模型、子代理、连接、上下文策略、原生工具、翻译设置与真实会话状态、请求统计及诊断摘要；不含密钥值。`translation.revision` 是翻译设置文档的脱敏摘要（即 `POST /api/translation` 的 `translationRevision` 令牌），文件尚不存在时为 `null`，页面保存时应省略 `translationRevision` 字段。`service` 只在后台服务记录与本进程配置匹配时给出 `{mode:'service',label,config,pid?,log?}`，前台运行或记录不匹配时为 `null` 或 `unrecognized`，页面据此给出真实重启命令。`metrics.recent[]` 的 `rate` 为 `{averageOutputTokensPerSecond,basis:'total_request_time'}`，只在成功、未取消、有真实输出 token 与耗时 > 0 时出现；`context` 是上一次请求的 `{usedTokens,limitTokens,ratio,source}`。`connections.active` 是当前进程生效的连接，`connections.saved` 是已保存待重启的一组，`connections.restartRequired` 表示两者不同 |
+| `GET /api/providers` | `{presets:[{id,name,kind,baseURL,protocols,models,source:{url,checkedAt},notes?}]}`，供应商预设及其来源 |
+| `POST /api/model-search` | `{query,presetId?,connectionId?}` → `{query,models:[候选]}`；只返回候选，不自动保存。候选带 `protocols`（可能是空列表）、`source`、`sources` 与 `metadataSource`（`contextWindow` 的真实来源）。同时给连接与不相符的预设返回 400 `preset_connection_mismatch` |
+| `POST /api/discovery` | `{connectionId,revision?}` → `{discovery:{connectionId,state,models,modelCount,at,httpStatus?,reason?}}`；`models` 即共享目录解析结果，每条都带 `protocols`（可为空列表）与自己的 `source`。只读一条已保存连接的 `/models`，`revision` 可省略——发现不写配置，过期值不阻止这次只读检查；带了则与其他端点一样按 409 拒绝。同一时刻只允许一次发现，第二次返回 409 `discovery_busy` |
+| `POST /api/models` | `{revision, models}`，完整模型目录；模型可含 `connectionId`、`upstreamModelId`、`contextLimit?`、`metadataSource?:{kind:'preset'|'discovery'|'manual',url?,checkedAt?}`。`contextWindow` 是用户预算，已知 `contextLimit` 时不得超过 |
+| `POST /api/connections` | `{revision, connections:[{id,name,providerPresetId?,baseURL,apiKeyEnv?,protocols?,apiKey?}]}` 整组替换；省略 `apiKey` 保留旧值，新连接必须提供。保存后待重启 |
+| `POST /api/context` | `{policy:{mode:'inherit'|'custom',triggerRatio?,reservedTokens?}}` → `{context}`；`triggerRatio` 为 0.50–0.99 的小数，面板以百分比输入 |
+| `GET /api/tools` | `{available, reason?, servers:[脱敏行]}`；只列举，不启动任何服务器 |
+| `POST /api/tools` | `{action:'add'|'update'|'remove'|'test', name?, server?, patch?}` → `{tools, result?}`；`test` 是唯一会启动进程的操作 |
+| `POST /api/connection` | `{revision, upstream:{baseURL,apiKeyEnv}, tokenEnv, port, dns:{enabled,port}}`；旧版单上游入口，成功返回 `{ok:true,state}`，连接等重启后应用 |
 | `POST /api/subagents` | `{revision,mode,model,effort?,transport?}` 或 `{revision,mode:'pool',model,transport:'native-config',models:[{id,description}]}`；成功返回 `{ok:true,state}`。`transport` 仅接受 `native-config`，`pool` 固定使用它 |
-| `POST /api/translation` | `{revision,...translation}`，完整翻译设置；成功返回 `{ok:true,state}`，已有宿主异步应用并回报状态 |
-| `POST /api/actions` | `{id,at,action}`；202 返回 `{ok:true,operation}`，轮询状态确认结果；支持 `connect-kimi`、`check-upstream`、`check-compat`、`check-translation`、`launch-translated-kimi` |
+| `POST /api/translation` | `{revision?, translationRevision?, ...translation}`，完整翻译设置；成功返回 `{ok:true,state}`，已有宿主异步应用并回报状态。锁分两层，可只送其一：`revision`（别名 `documentRevision`）仍是 gateway.json 整文档锁，旧客户端照旧受保护；`translationRevision` 是翻译设置独立的 CAS 令牌，取 `GET /api/state` 的 `translation.revision`（整份 settings 文档的脱敏摘要）。文件尚不存在时 state 发布 `null`，页面此时**省略 `translationRevision` 字段**——首次保存的合法路径是不送该字段，而不是送 `null`；非字符串值一律视为未送设置锁（带文档锁时直接跳过设置 CAS）。不送文档锁时必须送字符串设置令牌，两者同送则都须匹配。写入前运行时会对文件重读比对：预检发现令牌过期时返回 409 `translation_settings_conflict` 并带 `expectedRevision`；预检通过但写入前文件又被其他实例改写（竞态窗口）时返回 409 `translation_settings_conflict` 且带 `saved:true`、不带 `expectedRevision`——页面随后刷新状态、从新的 `translation.revision` 取令牌重存。整文档不匹配仍是 409 `configuration_conflict`。设置已落盘但宿主未能应用时返回 503 `translation_apply_failed` 且带 `saved:true` |
+| `POST /api/actions` | `{id,at,action}`；202 返回 `{ok:true,operation}`，轮询状态确认结果；支持 `connect-kimi`、`check-upstream`（可带 `connectionId` 指定一条连接）、`check-compat`、`check-translation`、`launch-translated-kimi`。`check-upstream` 只检查用户点的那条连接：连接必须是当前运行进程可路由的端点，否则 409 `connection_unavailable`；结果按 `connectionId` 认领，省略时检查旧版单上游。同一 `id` 换连接重放返回 409 |
 
 操作请求五分钟内有效，先持久记录再执行；同一次操作的重试须复用 `id` 和 `at`，重复请求返回原结果，中断后不重放。配置保存须带当前 `revision`，不能在网络结果未知时盲目重试。错误统一返回 `{error:{code,message}}`；已落盘但运行策略未更新时另带 `saved:true`。API 使用面板专用 Bearer 密钥、精确 Host/Origin 检查和 JSON 请求体，推理端点仍拒绝网页来源。
 
+上表中的 `providers`、`model-search`、`discovery`、`connections`、`context`、`tools` 与模型的路由字段是本轮面板已实现的契约，由多连接、上下文与 MCP 的后端模块提供。面板在服务端没有这些接口时会显示「尚未提供」，并退回旧版单上游表单和只读状态，不会伪造连接列表或上下文策略。
+
 ## 思考翻译（可选）
 
-在面板的 **思考翻译** 页启用、选择服务和目标语言并保存。原生接入宿主会应用设置；尚未连接时可点击 **从网关启动 Kimi**。持续监督保存启用意图，Kimi 普通重启或更新后，在确认安装归属与实时空闲状态后正常重开接入通道，恢复翻译；不强杀进程。原生固定子模型和模型池不依赖副本。
+独立版在面板的 **思考翻译** 页启用、选择服务和目标语言并保存；Magpie 插件在它自己的「Kimi Work 模型设置」页提供同一引擎的设置（见上文[边界](#与-magpie-插件的边界)），两者写入各自的设置存储，不要同时启用。原生接入宿主会应用设置；尚未连接时可点击 **从网关启动 Kimi**。持续监督保存启用意图，Kimi 普通重启或更新后，在确认安装归属与实时空闲状态后正常重开接入通道，恢复翻译；不强杀进程。原生固定子模型和模型池不依赖副本。
 
 支持 Bing、Google 和自定义 Chat Completions，可选中文、英语、日语、韩语、西班牙语、法语、德语、俄语。Bing/Google 使用其公开翻译入口，可用性由服务方决定。思考文本会发送到所选翻译服务；代码块、行内代码和链接保持原文。长文本分段处理，超过边界或翻译失败会显示原因并保留原文，不用原文冒充成功。
 
@@ -141,7 +164,7 @@ kimi-work-gateway panel --config gateway.json
 }
 ```
 
-翻译设置由面板提供，`panel`、后台服务及配置了翻译的 `serve` 都使用同一接入监督机制。只有渲染器确认后才显示生效。页面提供 **译文 / 原文 / 重译**，折叠随原思考区域同步，停用后恢复原文。关闭浏览器不影响翻译；网关退出不强杀现有 Kimi，恢复相同状态目录后继续监督。Kimi 主动退出后当前宿主结束，后台等待下一次打开；更新后的普通启动会重新检查并恢复。
+翻译设置由面板提供，`panel`、后台服务及配置了翻译的 `serve` 都使用同一接入监督机制。设置保存受两层锁保护：`revision` 仍是 gateway.json 整文档锁（历史行为不变），`translationRevision` 是翻译设置自己的 CAS 令牌——页面发送从 `GET /api/state` 读到的 `translation.revision`，运行时在写入前重新读取磁盘上的设置文档并比对，其他实例先改过时保存以 409 `translation_settings_conflict` 失败。文件尚不存在时 state 发布 `null`，页面省略该字段直接保存，这是首次保存的合法路径；非字符串值一律视为未送设置锁。冲突分两种情况：预检发现令牌过期时错误带 `expectedRevision`；预检通过但写入前文件又被改写时错误带 `saved:true`、不带令牌——两种情况下页面都保留编辑、刷新状态并从新的 `translation.revision` 取令牌，由用户确认后重存，不会静默覆盖。只有渲染器确认后才显示生效。页面提供 **译文 / 原文 / 重译**，折叠随原思考区域同步，停用后恢复原文。关闭浏览器不影响翻译；网关退出不强杀现有 Kimi，恢复相同状态目录后继续监督。Kimi 主动退出后当前宿主结束，后台等待下一次打开；更新后的普通启动会重新检查并恢复。
 
 同一套翻译引擎与设置覆盖两处可见思考：Work 页面的思考块，以及 Chat 页面（`https://www.kimi.com` 的对话、历史与根路由）中已展开的思考内容。默认仍然关闭，沿用同一个开关、服务与目标语言；不修改模型上下文、不修改消息存储，只翻译页面上已经显示出来的思考文本。
 
@@ -153,7 +176,7 @@ Chat 页面与 Work 的结构不同，引擎按页面实际契约工作：折叠
 
 **优先继续使用当前版本。** Kimi 的版本号或整份源码摘要变化不会单独触发“不支持”。普通固定子代理和模型池使用原生 TOML，不依赖旧运行时副本。网关运行时根据已确认的当前账户原生 profile 恢复被重建的 provider 和模型表，并重新应用持久保存的池、用途与默认项；状态位于用户目录，不随应用版本号迁移。首次与目录变化由网关调用 Kimi 原生导入接口完成；已确认账户且已有授权时可恢复丢失目录。明确断开、账户身份无法确认或用户手改冲突时暂停并报告，不猜账户、不还原旧凭据。入口或配置语义真正变化时，再检查本项目更新。旧副本路径和翻译分别按其实际结构、启动契约与页面回执检查能力。
 
-从 v0.6.0 起，可在 **连接与诊断 → 程序更新** 中检查 GitHub 最新稳定版、下载更新或回退。命令行也可使用：
+从 v0.6.0 起，可在 **连接与工具 → 程序更新** 中检查 GitHub 最新稳定版、下载更新或回退。命令行也可使用：
 
 ```sh
 kimi-work-gateway check-update
@@ -173,7 +196,11 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `id` | 是 | 上游真实模型 ID，1–2048 字符，不含控制字符；不必包含 `/` |
+| `id` | 是 | 本机路由 ID，1–2048 字符，不含控制字符；不必包含 `/`，末段决定协议 |
+| `connectionId` | 否 | 该模型所属的命名连接；省略时沿用旧版单上游 |
+| `upstreamModelId` | 否 | 发给上游的 `model` 原样值；省略时用 `id` |
+| `contextLimit` | 否 | 上游文档给出的硬上限，只用于校验预算 |
+| `metadataSource` | 否 | `contextWindow` 的出处 `{kind: 'preset'\|'discovery'\|'manual', url?, checkedAt?}` |
 | `protocol` | 是 | `chat` 或 `responses`。必须与 ID 命名一致，冲突会直接拒绝启动 |
 | `contextWindow` | 是 | 正整数 |
 | `maxOutputTokens` | 否 | 正整数 |
@@ -198,11 +225,11 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 | `compat --config <file>` | 用已安装 Kimi 检查指定模型配置；省略配置只检查内置样例 |
 | `status` | 打印网关状态文件、准备回执与子代理策略/运行时状态 |
 | `copy-token` | 把本地网关 Token 复制到剪贴板 |
-| `subagents-prepare` | 为子代理控制适配本地运行时副本（见下节）；不改安装目录 |
+| `subagents-prepare` | 为旧副本子代理控制适配本地运行时副本（见[旧副本子代理控制](#旧副本子代理控制历史兼容)）；不改安装目录 |
 | `subagents-status` | 只读报告子代理策略与运行时状态 |
 | `subagents-launch` | 用适配后的运行时副本启动 Kimi；需先退出 Kimi |
 
-`serve` 与 `panel` 共用自动接入连接；首次准备可能请求系统管理员授权，取消后不会反复弹框。显式启用原生子代理同步后，只管理下文所述私有 TOML 区块。状态文件包含进程、URL、模型数量、DNS 与策略，不含 Key 或对话内容；退出时只清理仍归本实例所有的状态。
+`serve` 与 `panel` 共用自动接入连接；只有在启用单域名解析时首次准备才请求系统管理员授权，取消后不会反复弹框。显式启用原生子代理同步后，只管理下文所述私有 TOML 区块。状态文件包含进程、URL、模型数量、DNS 与策略，不含 Key 或对话内容；退出时只清理仍归本实例所有的状态。
 
 ## 原生子代理模型池
 
@@ -234,9 +261,9 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 | `waiting-config` | 模型尚未导入或私有配置尚未生成 |
 | `conflict` / `unverified` | 无法安全同步或确认安装结构，需查看原因 |
 
-模型池未出现在 Work 的工具定义中时，网关返回可重试的 `subagent_native_reload_pending`，不向上游转发旧定义。设置只作用于新建的普通子代理；`fork` 继承父会话，恢复旧子代理保留原有模型。`primary` 仅在 Kimi 原生为该工具提供此选择时继承主模型与档位；当前普通 Agent/AgentSwarm 只接受池内别名，TowerSpawn 保留 `primary`。需要在普通 Agent 中选主模型时，将主模型加入池并选择其别名。原生配置路径沿用 Kimi 自己的这些行为，与下文旧副本的严格守卫不同。plan、coder、explore 的类型决定工具权限，用途说明不构成按类型强制绑定。AgentSwarm、TowerSpawn 在 Work 实际启用这些功能时共用该池，本工具不解锁会员功能或开启隐藏功能。
+模型池未出现在 Work 的工具定义中时，网关返回可重试的 `subagent_native_reload_pending`，不向上游转发旧定义。设置只作用于新建的普通子代理；`fork` 继承父会话，恢复旧子代理保留原有模型。`primary` 仅在 Kimi 原生为该工具提供此选择时继承主模型与档位；当前普通 Agent/AgentSwarm 只接受池内别名，TowerSpawn 保留 `primary`。需要在普通 Agent 中选主模型时，将主模型加入池并选择其别名。原生配置路径沿用 Kimi 自己的这些行为，与旧副本路径的严格守卫不同（见[旧副本子代理控制](#旧副本子代理控制历史兼容)）。plan、coder、explore 的类型决定工具权限，用途说明不构成按类型强制绑定。AgentSwarm、TowerSpawn 在 Work 实际启用这些功能时共用该池，本工具不解锁会员功能或开启隐藏功能。
 
-`serve` 和面板会将已有的固定模型配置迁移为原生同步，包括未写 `transport` 的 `force` 配置。固定目标与模型池不再依赖随 Kimi 安装包变化的旧副本。兼容检查读取原生配置与选择能力；版本号变化只触发复核。新内核移除 `force` 键时使用其原生 `default_model` 语义；单成员池不暴露模型选择参数时按其真实行为处理，不误报为尚未加载。旧副本命令仍保留供兼容构建显式使用。Windows 真机仍需实测。
+`serve` 和面板会将已有的固定模型配置迁移为原生同步，包括未写 `transport` 的 `force` 配置。固定目标与模型池不再依赖随 Kimi 安装包变化的旧副本。兼容检查读取原生配置与选择能力；版本号变化只触发复核。新内核移除 `force` 键时使用其原生 `default_model` 语义；单成员池不暴露模型选择参数时按其真实行为处理，不误报为尚未加载。旧副本命令仍保留供兼容构建显式使用，收在[折叠段](#旧副本子代理控制历史兼容)里。Windows 真机仍需实测。
 
 ## Work 各功能的模型来源
 
@@ -257,11 +284,14 @@ Windows PowerShell 使用 `kimi-work-gateway.cmd`。这些命令不需要上游 
 
 这份边界来自对本机 Work 3.2.21 与 3.2.22 调用路径的检查；服务端实现与未来应用版本可能变化。代码中存在某个供应商 SDK，不等于该功能已经开放给用户。
 
-## 子代理控制（可选，非官方适配）
+## 旧副本子代理控制（历史兼容）
 
-本节是保留的旧副本接入，仅适用于允许覆盖运行时路径的桌面构建。默认情况下 Work 里的子代理沿用主模型。如果希望使用旧版严格守卫，本工具保留该**内部、非官方**路径：
+日常使用请走[原生子代理模型池](#原生子代理模型池)：固定子模型与模型池通过 Kimi 原生 TOML 配置工作，默认继承主模型，是正式支持路径。下面的旧副本接入是保留的**内部、非官方**兼容路径，仅适用于允许覆盖运行时路径的桌面构建；当前正式版 Kimi 3.2.21、3.2.22 的启动探针直接报告 `unsupported`（`packaged_bundle_override_disabled`）。它与原生路径的差异是旧版严格守卫：`fork` 继承父模型、用别的模型跑过的子代理 `resume` 被拒绝。配置、命令与状态诊断收进折叠段，按需展开。
 
-- `subagents-launch` 为本次进程设置 `DAIMON_BUNDLE_DIR`，指向本地适配副本。准备前会执行正式应用的启动接口探针；应用忽略该变量时直接报告 `unsupported`。**当前正式版 Kimi 3.2.21、3.2.22 属于此情况，以下流程需启动能力检查通过后才可使用。** 不自动迁移为原生 TOML 配置，避免放松 fork/resume 的严格约束。
+<details>
+<summary>展开：旧副本子代理的配置、命令与状态（历史兼容）</summary>
+
+- `subagents-launch` 为本次进程设置 `DAIMON_BUNDLE_DIR`，指向本地适配副本。准备前会执行正式应用的启动接口探针；应用忽略该变量时直接报告 `unsupported`。以下流程需启动能力检查通过后才可使用，不自动迁移为原生 TOML 配置，避免放松 fork/resume 的严格约束。
 - 内核按配置读取、依赖注入、子代理创建与恢复结构定位，并用真实内核行为回归和生成代码语法检查验证守卫。未知版本可通过这些检查；无法确认结构和行为时拒绝准备。`serve` 负责策略和转发，不修改 Kimi 安装目录、`app.asar`、可执行文件或签名。
 - 主模型仍由 Work 菜单选择；这里只影响子代理。
 
@@ -313,6 +343,8 @@ kimi-work-gateway subagents-launch
 - 独立 CLI 的 `subagents-launch` 不读取 `gateway.json`，只清理默认的 `KIMI_WORK_UPSTREAM_KEY`、`KIMI_WORK_GATEWAY_TOKEN` 和 `KIMI_WORK_TRANSLATION_API_KEY`。自定义上游、Token 或翻译凭证变量名时，请通过已加载该配置的 `panel` 启动，避免这些自定义变量被 Kimi 子进程继承。
 - `loaded` 表示匹配运行时、存活进程、有效心跳和当前策略版本已确认；需同时检查 `mode`，它可以是 `force`、`inherit` 或 `blocked`。`prepared` 和 `waiting-launch` 不表示强制策略已生效，`starting` 只表示启动请求已发出。
 - `pending-policy` 表示运行时在等待读取新策略；`policy-unavailable` 表示运行时仍在但策略无法读取，主会话保持可用、子代理被拒绝。`heartbeat-stale` 表示匹配进程仍在但心跳过期，不代表应再次启动。`unavailable`、`outdated`、`conflict` 分别说明来源不可用、来源已变化和副本/状态文件冲突。
+
+</details>
 
 ## 跨版本与 `compat`
 
@@ -367,11 +399,11 @@ await gateway.configure({ key: 'local-token', port: 3426 });
 
 - 只支持 Chat Completions 与 Responses 两种上游协议，不做跨协议转换。
 - 独立 CLI 的模型清单来自配置文件。使用 `serve` 时，手动修改 `models` 后需重启；使用 `panel` 时，可在模型管理保存并立即应用。两种方式都需要在 Kimi 重新导入以更新模型菜单；仅重新导入不会改变网关配置。
-- 请求的端点必须与模型声明的协议一致，错误请求返回 `409 model_protocol_mismatch`，不会转发到上游。
-- 首次接入需要管理员授权（macOS resolver / Windows hosts）。准备只有在操作完成且验证成功后才记为 `done`；裁决缺失会记为失败。
+- 请求的端点必须与模型声明的协议一致，错误请求返回 `409 model_protocol_mismatch`，不会转发到上游。预算超过已知上限返回 400 `context_window_exceeds_limit`；同时给已保存连接与不相符的预设会返回 400 `preset_connection_mismatch`。
+- 单域名解析默认关闭。只有用户启用它时才需要一次系统管理员授权（macOS resolver / Windows hosts）；准备只有在操作完成且验证成功后才记为 `done`，裁决缺失会记为失败。
 - Windows prepare 可使用已存在的手工同值条目，撤销时保留该条目；只删除标记与内容完整匹配的归属条目对。BOM、原换行和无末尾换行的内容保留；不支持的编码拒绝改写。
 - 单域名解析只回答 `dev.msh.team`，指向合成地址 `10.255.255.254`，不代表接入真实公司内网。
-- 子代理控制是内部、非官方适配，按结构与实际启动能力检查；当前正式版 Kimi 3.2.21、3.2.22 不允许该副本加载路径。跨版本合成检查不保证所有未来版本可用。
+- 子代理控制是内部、非官方适配，按结构与实际启动能力检查；当前正式版 Kimi 3.2.21、3.2.22 不允许该副本加载路径（见[旧副本子代理控制](#旧副本子代理控制历史兼容)）。跨版本合成检查不保证所有未来版本可用。
 - Windows 真机已验证 CLI、Node/HTTP 流程及临时 hosts 文件的实际 PowerShell 编辑，并在官方普通 Kimi 3.2.21 的隔离用户目录中验证私有 CDP 管道与 Work 渲染器挂载。**真实 UAC、真实 hosts 修改与登录后的完整 Work 桌面流程仍未联合验收**；分层结果以发行说明为准。
 - 原生内核回归与翻译界面测试使用隔离目录、合成文本及本地模拟上游，覆盖模型绑定、恢复、坏策略和译文生命周期。它们不产生付费推理，也不能代替登录桌面后的整条调用链验证。
 

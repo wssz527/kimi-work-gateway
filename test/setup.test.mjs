@@ -9,7 +9,7 @@ import { run as runCommand } from '../cli.mjs';
 // otherwise reach the macOS administrator prompt while only serving a panel.
 const run = (argv, env, io, overrides = {}) => runCommand(argv, env, io, { nativeConnection: false, ...overrides });
 import { SetupServer, saveSetup, setupPaths, setupState, inspectOwnedFile, normalizeSetupInput,
-  normalizeSetupModels, readCredentials, writePanelEntry } from '../src/setup.mjs';
+  normalizeSetupModels, readCredentials, writeConnectionKeys, writePanelEntry } from '../src/setup.mjs';
 
 const KEY = 'sk-setup-test-0123456789';
 const MODELS = [
@@ -87,7 +87,7 @@ test('setup page is loopback only and needs the one-run session key', async () =
   expect(new URL(f.entry).hostname).toBe('127.0.0.1');
   const page = await request(f.base + '/');
   expect(page.status).toBe(200);
-  expect(page.text).toContain('Kimi Work 网关 · 首次设置');
+  expect(page.text).toContain('Kimi++ · 首次设置');
   // The page is self-contained: no external asset and no inline style/script
   // without the per-response nonce.
   expect(page.text).not.toMatch(/src="http/);
@@ -891,3 +891,68 @@ test('the state view keeps the panel link behind authentication and out of the s
   expect(view.text).not.toContain(readCredentials(f.paths.credentials).gatewayToken);
   expect(view.text).not.toContain('site-packages');
 }, 20000);
+
+// Connections exist beside the legacy single upstream. The page must be able
+// to save a first configuration that only has connections, keep every
+// per-connection key private, and still accept the old payload unchanged.
+test('a connections-only first save stores each connection key privately and reports only presence', async () => {
+  const f = await startSetup();
+  const auth = { Authorization: 'Bearer ' + f.key };
+  const saved = await request(f.base + '/api/save', { method: 'POST', headers: { ...auth, Origin: f.base },
+    body: JSON.stringify({ connections: [
+      { id: 'conn-a', name: 'Provider A', baseURL: 'https://a.example/v1', apiKeyEnv: 'KIMI_WORK_CONN_A_KEY',
+        protocols: ['responses'], apiKey: KEY },
+      { id: 'conn-b', name: 'Provider B', baseURL: 'https://b.example/v1', apiKey: 'conn-b-secret' },
+    ], port: 3426, models: [{ id: 'deepseek-v4-1-flash', protocol: 'responses', contextWindow: 131072,
+      connectionId: 'conn-a', upstreamModelId: 'deepseek-chat' }] }) });
+  expect(saved.status).toBe(200);
+  const text = saved.text;
+  const body = saved.json();
+  expect(body.state.configured).toBe(true);
+  // No legacy upstream block was invented for a connections-only save.
+  expect(body.state.baseURL).toBeNull();
+  expect(body.state.connections).toEqual([
+    { id: 'conn-a', name: 'Provider A', baseURL: 'https://a.example/v1', apiKeyEnv: 'KIMI_WORK_CONN_A_KEY',
+      protocols: ['responses'], apiKeySet: true },
+    { id: 'conn-b', name: 'Provider B', baseURL: 'https://b.example/v1', apiKeyEnv: 'KIMI_WORK_CONN_B_KEY',
+      apiKeySet: true },
+  ]);
+  expect(text).not.toContain(KEY);
+  expect(text).not.toContain('conn-b-secret');
+  const config = JSON.parse(fs.readFileSync(f.paths.config, 'utf8'));
+  expect(config.upstream).toBeUndefined();
+  expect(config.connections.map(row => row.id)).toEqual(['conn-a', 'conn-b']);
+  expect(JSON.stringify(config)).not.toContain(KEY);
+  const credentials = readCredentials(f.paths.credentials, { requirePrivate: true });
+  expect(credentials.connectionApiKeys).toEqual({ 'conn-a': KEY, 'conn-b': 'conn-b-secret' });
+  expect(credentials.upstreamApiKey).toBeUndefined();
+  // The state view is the same private shape after a reload.
+  const view = await request(f.base + '/api/state', { headers: auth });
+  expect(view.json().state.connections.every(row => row.apiKeySet === true)).toBe(true);
+  expect(view.text).not.toContain(KEY);
+}, 20000);
+
+test('a version 1 credential file is still readable and a connection save keeps its token', () => {
+  const { stateDir } = workspace();
+  const paths = setupPaths({ stateDir });
+  const { config } = normalizeSetupInput({ baseURL: 'https://api.example.com/v1', apiKey: KEY, models: MODELS });
+  saveSetup({ paths, config, apiKey: KEY });
+  const current = readCredentials(paths.credentials);
+  // Rewrite it in the shape the previous release wrote.
+  fs.writeFileSync(paths.credentials, JSON.stringify({ schemaVersion: 1, upstreamApiKey: KEY,
+    gatewayToken: current.gatewayToken }), { mode: 0o600 });
+  const legacy = readCredentials(paths.credentials, { requirePrivate: true });
+  expect(legacy).toMatchObject({ upstreamApiKey: KEY, gatewayToken: current.gatewayToken });
+  expect(legacy.connectionApiKeys).toEqual({});
+  // Adding a connection key upgrades the file without rotating the token.
+  const written = writeConnectionKeys(paths.credentials, { apiKeys: { 'conn-a': 'conn-a-key' } });
+  expect(written.schemaVersion).toBe(2);
+  expect(written.gatewayToken).toBe(current.gatewayToken);
+  expect(readCredentials(paths.credentials).connectionApiKeys).toEqual({ 'conn-a': 'conn-a-key' });
+  // Windows has no POSIX mode bits: a freshly written file reports 0o666 there,
+  // which is correct for that platform. The secret and token assertions above
+  // stay unconditional; only the permission check follows the repo convention.
+  if (process.platform !== 'win32') {
+    expect(fs.statSync(paths.credentials).mode & 0o777).toBe(0o600);
+  }
+});

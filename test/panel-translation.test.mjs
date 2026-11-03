@@ -8,9 +8,9 @@ import { KimiWorkGateway } from '../src/gateway.mjs';
 import { OpenAIBackend } from '../src/openai-backend.mjs';
 import { PanelController } from '../src/panel-controller.mjs';
 import { GatewayPanel } from '../src/panel.mjs';
-import { SubagentPolicy, readSubagentJSON, writeSubagentJSON } from '../src/subagent-policy.mjs';
+import { SubagentPolicy, currentDocumentRevision, readSubagentJSON, writeSubagentJSON } from '../src/subagent-policy.mjs';
 import { normalizeTranslationConfig } from '../src/translation-config.mjs';
-import { publicSurfaces } from '../src/translation-runtime.mjs';
+import { TranslationRuntime, publicSurfaces, translationRevision } from '../src/translation-runtime.mjs';
 
 const fixtures = [];
 const intent = action => ({ id: crypto.randomUUID(), at: Date.now(), action });
@@ -31,12 +31,24 @@ async function fixture({ force = false, translationRuntime } = {}) {
   const runtime = { inspect: () => ({ state: 'not-prepared' }),
     launch: async () => { calls.push('adapted-launch'); return { state: 'waiting-kimi-exit' }; },
     launchOriginal: async () => { calls.push('original-launch'); return { state: 'starting', pid: 4242 } } };
-  const translation = translationRuntime || {
-    configure(value) { this.settings = normalizeTranslationConfig(value); },
-    inspect: () => ({ state: 'not-started', internal: 'hidden' }),
-    check: () => ({ state: 'not-started', version: '3.2.21' }),
-    launch: async options => { calls.push(options); return { state: 'starting', pid: 4242, version: '3.2.21' }; },
-  };  const controller = new PanelController({ configFile: file, config, gateway, backend, stateDir: dir,
+  const translation = translationRuntime || new TranslationRuntime({
+    stateDir: dir, kimiDir: path.join(dir, 'kimi'),
+    // The controller never launches a host in these tests; the runtime is
+    // here for its real settings file, CAS and desiredSettings. Only the
+    // launch and Kimi-location surfaces are replaced, so a save drives the
+    // real CAS path against the real file.
+    spawnHost: () => { throw Error('translation_runtime_unavailable'); },
+  });
+  if (!translationRuntime) {
+    const realLaunch = translation.launch.bind(translation);
+    translation.launch = async options => {
+      calls.push(options);
+      return { state: 'starting', pid: 4242, version: '3.2.21' };
+    };
+    translation.check = () => ({ state: 'not-started', version: '3.2.21' });
+    translation.locate = () => ({ application: path.join(dir, 'kimi', 'Kimi'), version: '3.2.21' });
+  }
+  const controller = new PanelController({ configFile: file, config, gateway, backend, stateDir: dir,
     kimiDir: path.join(dir, 'kimi'), policy, runtime, translationRuntime: translation,
     env: { KIMI_WORK_TRANSLATION_API_KEY: 'private-translation-secret' },
     probe: { check: async () => ({ revealed: false }) } });
@@ -50,8 +62,10 @@ function api(f, route, body, headers = {}) {
     headers: { Authorization: 'Bearer ' + f.panel.key, Origin: f.panel.url, 'Content-Type': 'application/json', ...headers } });
 }
 async function save(f, value = {}) {
-  const { revision } = await f.controller.state();
-  return api(f, '/api/translation', { revision, ...normalizeTranslationConfig({ enabled: true, ...value }) });
+  const state = await f.controller.state();
+  return api(f, '/api/translation', { revision: state.revision,
+    translationRevision: state.translation.revision,
+    ...normalizeTranslationConfig({ enabled: true, ...value }) });
 }
 afterEach(async () => {
   for (const f of fixtures.splice(0)) {
@@ -213,7 +227,8 @@ test('saved-but-unapplied translation settings are visible and can be reapplied 
   f.translation.configure = configure;
   expect((await save(f, { enabled: false })).status).toBe(200);
   expect((await f.controller.state()).translation.configured.enabled).toBe(false);
-  expect((await f.controller.state()).translation.runtime.state).toBe('not-started');
+  // The real runtime reports the saved-but-never-started settings honestly.
+  expect((await f.controller.state()).translation.runtime.state).toBe('disabled');
 });
 
 test('external configuration changes and blocked policy prevent translation launch', async () => {
@@ -224,4 +239,135 @@ test('external configuration changes and blocked policy prevent translation laun
   await f.controller.operationTask;
   expect((await f.controller.state()).operation).toMatchObject({ state: 'failed', reason: 'configuration_changed' });
   expect(f.calls).toHaveLength(0);
+});
+
+// Two locks protect a translation save, and both stay real. `revision` is the
+// historical whole-document gateway.json CAS: an old client that sends it (or
+// omits it) keeps exactly the behaviour it always had. `translationRevision`
+// is the narrower settings token the state publishes — the digest of the whole
+// translation-settings.json document, the same token the runtime's CAS checks.
+// When sent it must match, and it is handed down to `configure` so the write
+// re-checks the file immediately before the rename.
+test('translation saves keep the document CAS and pass the settings token down to the runtime', async () => {
+  const f = await fixture();
+  const before = await f.controller.state();
+  expect(typeof before.translation.revision).toBe('string');
+  expect(before.translation.revision).not.toBe(before.revision);
+  // The published token is the settings file's document digest, not the
+  // payload digest stored inside the document.
+  expect(before.translation.revision)
+    .toBe(currentDocumentRevision(path.join(f.dir, 'translation-settings.json')));
+
+  expect((await save(f)).status).toBe(200);
+  const saved = await f.controller.state();
+  expect(typeof saved.translation.revision).toBe('string');
+  expect(saved.translation.revision).not.toBe(before.translation.revision);
+  expect(saved.translation.revision)
+    .toBe(currentDocumentRevision(path.join(f.dir, 'translation-settings.json')));
+
+  // The old whole-document lock still works on its own: a stale gateway.json
+  // revision is the historical 409 configuration_conflict, not a settings
+  // conflict, and nothing is written.
+  const staleDocument = await api(f, '/api/translation', {
+    revision: before.revision, ...normalizeTranslationConfig({ enabled: true }) });
+  expect(staleDocument.status).toBe(409);
+  expect((await staleDocument.json()).error.code).toBe('configuration_conflict');
+  expect(readSubagentJSON(f.file).translation.enabled).toBe(true);
+
+  // A stale settings token is refused before any write.
+  const staleSettings = await api(f, '/api/translation', {
+    translationRevision: before.translation.revision, ...normalizeTranslationConfig({ enabled: true }) });
+  expect(staleSettings.status).toBe(409);
+  const { error } = await staleSettings.json();
+  expect(error.code).toBe('translation_settings_conflict');
+  expect(error.expectedRevision).toBe(saved.translation.revision);
+  expect(readSubagentJSON(f.file).translation.enabled).toBe(true);
+
+  // A save with neither lock is refused: it could overwrite anything blindly.
+  const bare = await api(f, '/api/translation', { ...normalizeTranslationConfig({ enabled: true }) });
+  expect(bare.status).toBe(409);
+  expect(readSubagentJSON(f.file).translation.enabled).toBe(true);
+
+  // A document-only save (the old client shape) still succeeds.
+  const current = await f.controller.state();
+  const documentOnly = await api(f, '/api/translation', { revision: current.revision,
+    ...normalizeTranslationConfig({ enabled: false }) });
+  expect(documentOnly.status).toBe(200);
+  expect(readSubagentJSON(f.file).translation.enabled).toBe(false);
+  expect((await f.controller.state()).translation.configured.enabled).toBe(false);
+});
+
+test('a first save carrying the current settings revision is accepted and republished', async () => {
+  const f = await fixture();
+  const current = await f.controller.state();
+  const response = await api(f, '/api/translation', { revision: current.revision,
+    translationRevision: current.translation.revision,
+    ...normalizeTranslationConfig({ enabled: true }) });
+  expect(response.status).toBe(200);
+  const { state } = await response.json();
+  expect(state.translation.revision)
+    .toBe(currentDocumentRevision(path.join(f.dir, 'translation-settings.json')));
+});
+
+// 审查项 P2-1 的实证：settings 文件缺失时 state 必须发布 null（不是对草稿或
+// 默认值算摘要），首次保存（无 translationRevision 令牌）放行并落盘，之后
+// 状态恢复发布真实修订；带陈旧令牌的重试被拒。走真实 TranslationRuntime 的
+// 完整文件路径，删除文件模拟「状态目录被外部清掉」的场景。
+test('a missing settings file publishes null, lets the first save through, then resumes revisions', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kwg-panel-translation-enoent-'));
+  const file = path.join(dir, 'config.json');
+  const document = { upstream: { baseURL: 'http://127.0.0.1:9/v1', apiKeyEnv: 'TEST_KEY' }, port: 0,
+    models: [{ id: 'group/test', protocol: 'responses', tools: true, contextWindow: 128000 }] };
+  writeSubagentJSON(file, document);
+  const config = readConfig(document);
+  const backend = new OpenAIBackend({ ...config.upstream, apiKey: 'test-key', models: config.models });
+  const gateway = new KimiWorkGateway({ backend });
+  await gateway.configure({ key: 'test-token', port: 0 });
+  const policy = new SubagentPolicy({ stateDir: dir, kimiDir: path.join(dir, 'kimi') });
+  policy.configure(config.subagents, backend.models);
+  const settingsFile = path.join(dir, 'translation-settings.json');
+  const runtime = new TranslationRuntime({ stateDir: dir, kimiDir: path.join(dir, 'kimi') });
+  const controller = new PanelController({ configFile: file, config, gateway, backend, stateDir: dir,
+    kimiDir: path.join(dir, 'kimi'), policy,
+    translationRuntime: runtime, env: {},
+    probe: { check: async () => ({ revealed: false }) } });
+  const panel = new GatewayPanel({ controller });
+  await panel.start({ port: 0 });
+  fixtures.push({ dir, file, controller, policy, gateway, panel });
+  const call = body => api({ panel }, '/api/translation', body);
+
+  try {
+    // The constructor seeded the settings file from the saved config.
+    expect(fs.existsSync(settingsFile)).toBe(true);
+    // Simulate the state directory being wiped: no settings file at all.
+    fs.rmSync(settingsFile, { force: true });
+    const state = await controller.state();
+    expect(state.translation.revision).toBeNull();
+
+    // The first save carries no settings token (the page saw null) and must
+    // go through, recreating the file.
+    const seededRevision = currentDocumentRevision(file);
+    const first = await call({ revision: seededRevision,
+      ...normalizeTranslationConfig({ enabled: true }) });
+    expect(first.status).toBe(200);
+    expect(fs.existsSync(settingsFile)).toBe(true);
+    const republished = (await controller.state()).translation.revision;
+    expect(typeof republished).toBe('string');
+
+    // A retry naming the *previous* settings token (the file it saw was wiped
+    // and republished under a new revision) is refused before any write.
+    const staleRetry = await call({ revision: currentDocumentRevision(file),
+      translationRevision: '0'.repeat(64), ...normalizeTranslationConfig({ enabled: false }) });
+    expect(staleRetry.status).toBe(409);
+    const { error } = await staleRetry.json();
+    expect(error.code).toBe('translation_settings_conflict');
+    // A document-only retry — the old-client shape — still succeeds: the
+    // historical whole-document lock alone protects it.
+    const legacyRetry = await call({ revision: currentDocumentRevision(file),
+      ...normalizeTranslationConfig({ enabled: false }) });
+    expect(legacyRetry.status).toBe(200);
+    expect(readSubagentJSON(settingsFile).settings.enabled).toBe(false);
+  } finally {
+    await panel.stop(); await controller.close(); await gateway.stop(); policy.close();
+  }
 });
